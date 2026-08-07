@@ -1,0 +1,40 @@
+{
+  "seed": 42,
+  "dataset_download_url": "https://zenodo.org/records/10546408/files/dataset.zip?download=1",
+  
+  "classification_root": "../../dataset/classification_sample/validation",
+  "mean_image": 0.2031,
+  "std_image": 0.0930,
+  "mean_tof": 2.7159,
+  "std_tof": 0.6062,
+
+  "model_original": "../throwaway_models", 
+  "dataset_training_root": "../collision_dataset/train",
+  "outdir": "../throwaway_models",
+  "classification_fixed_root": "../original_dataset",
+  "epochs": 7,
+  "lr": 0.02,
+  "weight_decay": 0.0,
+  "patience": 0,
+  "batch_size": 128,
+  "data_selection": "kcenter_latent",
+  "use_ghost_for_selection": false,
+  "threshold": 0.89,
+  "epochs_mode": "fixed",
+  "train_time_budget_s": 30.0,
+  "deterministic": true,
+  "latents_only": true,
+  "latent_tap": "post_comb2",
+  "validation": true,
+  "validation_root": "../original_dataset/validation",
+  "eval_collisions_after_ft": true,
+
+  "save_checkpoint": true,
+  "save_train_summary_csv": false,
+  "save_selected_train_samples": false,
+  "save_train_val_loss_csv": false,
+  "force_prepare_original_dataset": true,
+
+  "n_original_gate_to_select": 270,
+  "n_original_no_gate_to_select": 45
+}

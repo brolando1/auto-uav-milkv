@@ -1,0 +1,1 @@
+cmd_src/deck/backends/built-in.o :=  arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16  -r -o src/deck/backends/built-in.o src/deck/backends/deck_backend_onewire.o src/deck/backends/deck_backend_deckctrl.o

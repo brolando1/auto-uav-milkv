@@ -1,0 +1,14 @@
+**/__pycache__/
+*.pyc
+
+.idea/
+*.log
+
+dataset/
+training_quantization/recorded_dataset
+training_quantization/retraining_data
+training_quantization/collision_dataset
+training_quantization/original_dataset
+training_quantization/continual_learning/original_dataset
+
+training_quantization/throwaway_models

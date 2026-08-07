@@ -1,0 +1,4 @@
+obj-y += ToFplatform.o
+obj-y += I2C_expander.o
+obj-y += main_tof.o
+obj-y += vl53l5cx_api.o
