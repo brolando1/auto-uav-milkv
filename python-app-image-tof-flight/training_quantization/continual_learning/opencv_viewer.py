@@ -841,11 +841,156 @@ def crazyflie_viewer(shared_state) -> None:
     status_msg = ""
     status_until = 0.0
     status_crash = shared_state['crash']
+    last_combined_frame: Optional[np.ndarray] = None
 
     def set_status(msg: str, seconds: float = 2.0) -> None:
         nonlocal status_msg, status_until
         status_msg = msg
         status_until = time.time() + float(seconds)
+
+    def clear_crash_flag() -> None:
+        with shared_state['lock']:
+            shared_state['crash'] = 0
+
+    def handle_collision_dump_and_training(*, trigger_reason: str, combined_frame: Optional[np.ndarray]) -> bool:
+        nonlocal train_proc, train_start_wall, train_start_mon, current_model_path
+
+        if collision_cam_dir is None or collision_tof_dir is None:
+            set_status("Collision saving is disabled; cannot retrain.", seconds=3.0)
+            return False
+
+        # If training is running, keep a crash trigger pending so it can be handled
+        # after the current training subprocess finishes.
+        if train_proc is not None:
+            set_status("Training already running: dump deferred.", seconds=2.0)
+            return False
+
+        if len(buffer_data) == 0:
+            set_status("Buffer empty (nothing to save)", seconds=2.0)
+            return False
+
+        # Wipe old data on disk and save from 0
+        try:
+            wipe_collision_leaf_dirs(collision_cam_dir, collision_tof_dir)
+        except Exception as e:
+            print(f"[WARN] Failed to wipe collision dirs: {e}")
+            set_status("Failed to wipe dataset dirs (see terminal).", seconds=3.0)
+            return False
+
+        frames_to_skip = 20
+        buffer_list = list(buffer_data)
+        if len(buffer_list) > frames_to_skip:
+            data_to_dump = buffer_list[:-frames_to_skip]
+            skipped_n = frames_to_skip
+        else:
+            data_to_dump = buffer_list
+            skipped_n = 0
+            print(f"[WARN] Buffer too short to skip {frames_to_skip} frames.")
+
+        saved_n = dump_collision_buffer_zero_index(
+            buffer_data=data_to_dump,
+            cam_dir=collision_cam_dir,
+            tof_dir=collision_tof_dir,
+        )
+        print(f"[INFO] Collision dump: saved {saved_n}(skipped {skipped_n}) samples -> {collision_cam_dir.parent}")
+        set_status(f"Saved {saved_n} samples (skipped {skipped_n})(index reset to 0)", seconds=2.5)
+
+        # log crash/manual event
+        crash_log_path = this_dir / "crash_events.log"
+
+        crash_id = time.strftime("%Y%m%d_%H%M%S")
+        last_frame_idx = max(0, saved_n - 1)
+
+        plot_frames_count = len(plot_history_18s)
+        plot_start_frame = max(1, frame_count - plot_frames_count + 1)
+        plot_end_frame = frame_count
+
+        collision_end_frame = frame_count - skipped_n
+        collision_start_frame = max(1, frame_count - saved_n + 1)
+
+        log_msg = (
+            f"{trigger_reason.upper()} DUMP TRIGGERED: {crash_id}\n"
+            f"  - Target: {args.collision_name}/{args.collision_label}\n"
+            f"  - Total Frames: {saved_n}\n"
+            f"  - Dumped Files: {args.collision_root}/{args.collision_name} -> 000000.npy to {last_frame_idx:06d}.npy\n"
+            f"  - Collision Frames: {collision_start_frame} to {collision_end_frame}\n"
+            f"  - Plot Frames (18s context): {plot_start_frame} to {plot_end_frame}\n"
+            f"  - Model in use: {current_model_path.name}\n"
+            f"--------------------------------------------------\n"
+        )
+
+        try:
+            with open(crash_log_path, "a", encoding="utf-8") as f:
+                f.write(log_msg)
+            print(f"[INFO] Crash event logged to {crash_log_path}")
+        except Exception as e:
+            print(f"[WARN] Could not write to crash log: {e}")
+
+        if combined_frame is not None:
+            img_save_path = this_dir / f"crash_{crash_id}_visual.png"
+            try:
+                cv2.imwrite(str(img_save_path), combined_frame)
+            except Exception as e:
+                print(f"[WARN] Failed to save crash visual: {e}")
+
+        # generate the confidence plot
+        plot_save_path = this_dir / f"crash_{crash_id}_plot.pdf"
+        try:
+            # Extract timestamps and probabilities
+            t_vals = [item[0] for item in plot_history_18s]
+            p_vals = [item[1] for item in plot_history_18s]
+
+            # Normalize time so the graph starts at 0.0s
+            if t_vals:
+                t0 = t_vals[0]
+                t_vals = [t - t0 for t in t_vals]
+
+            plot_frames_count = len(t_vals)
+            plot_start_frame = max(1, frame_count - plot_frames_count + 1)
+            avg_fps_18s = plot_frames_count / 18.0 if plot_frames_count > 0 else 0.0
+
+            plt.figure(figsize=(10, 4))
+            plt.plot(t_vals, p_vals, label="p(gate) EMA", color='#4c72b0') # standard blue
+            plt.axhline(y=0.5, color='steelblue', linestyle='--', linewidth=1)
+            plt.ylim(-0.05, 1.05)
+
+            # Match the title and labels from the Vicon table exactly
+            plt.title(f"Confidence vs Time | frames {plot_start_frame}-{frame_count} @ {avg_fps_18s:.1f} fps", fontsize=10)
+            plt.xlabel("Tempo [s] (t=0 all frame start)", fontsize=9)
+            plt.ylabel("p(gate)", fontsize=9)
+
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(str(plot_save_path), dpi=150)
+            plt.close()
+        except Exception as e:
+            print(f"[WARN] Failed to save crash plot: {e}")
+
+        # Start fine-tuning if requested
+        if args.finetune_on_dump:
+            if not sim_cfg_path.exists():
+                print(f"[WARN] sim_cfg not found: {sim_cfg_path}")
+                set_status("Config.json not found for simulation.py", seconds=3.0)
+                return True
+
+            try:
+                train_proc, train_start_wall = start_simulation_subprocess(
+                    repo_root=repo_root,
+                    cfg_path=sim_cfg_path,
+                    log_path=train_log_path,
+                )
+                train_start_mon = time.monotonic()
+                print("================================================================")
+                print("[OPENCV-VIEWER] TRAINING STARTED (simulation.py)")
+                print(f"  cfg = {sim_cfg_path}")
+                print(f"  log = {train_log_path}")
+                print("================================================================")
+                set_status("TRAINING STARTED (see log tail in overlay)", seconds=3.0)
+            except Exception as e:
+                print(f"[WARN] Failed to start training: {e}")
+                set_status("Failed to start training (see terminal).", seconds=3.0)
+
+        return True
 
     try:
         while True:
@@ -860,9 +1005,15 @@ def crazyflie_viewer(shared_state) -> None:
             
 
             if pair is None:
+                if status_crash == 1:
+                    handled = handle_collision_dump_and_training(
+                        trigger_reason="crash",
+                        combined_frame=last_combined_frame,
+                    )
+                    if handled:
+                        clear_crash_flag()
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
-                #if there was a crash insert artificial pair to make sure retraining still happens(only first time it goes through loop!)
                 continue
 
             cam_decoded, latest_tof_mm, meta = pair
@@ -964,6 +1115,7 @@ def crazyflie_viewer(shared_state) -> None:
             # --- Combine camera + ToF in ONE window ---
             try :
                 combined = hstack_resize_to_height(cam3d, tof_panel, height=int(args.panel_h))
+                last_combined_frame = combined
             except Exception as e:
                 print(f"[ERROR] hstack failed : {e}")
                 continue
@@ -1140,140 +1292,13 @@ def crazyflie_viewer(shared_state) -> None:
 
             # --- Dump ring buffer to collision_dataset on key press ---
             if (args.save_collision and int(args.buffer_n) > 0 and key == ord(args.buffer_key)) or (status_crash == 1):
-                with shared_state['lock']:
-                    shared_state['crash'] = 0
-                if collision_cam_dir is None or collision_tof_dir is None:
-                    continue
-
-                # If training is running, ignore dump to keep things consistent
-                if train_proc is not None:
-                    set_status("Training already running: dump ignored.", seconds=2.0)
-                    continue
-
-                if len(buffer_data) == 0:
-                    set_status("Buffer empty (nothing to save)", seconds=2.0)
-                    continue
-
-                # Wipe old data on disk and save from 0
-                try:
-                    wipe_collision_leaf_dirs(collision_cam_dir, collision_tof_dir)
-                except Exception as e:
-                    print(f"[WARN] Failed to wipe collision dirs: {e}")
-                    set_status("Failed to wipe dataset dirs (see terminal).", seconds=3.0)
-                    continue
-
-                frames_to_skip = 20
-                buffer_list = list(buffer_data)
-                if len(buffer_list) > frames_to_skip:
-                    data_to_dump = buffer_list[:-frames_to_skip]
-                    skipped_n = frames_to_skip
-                else:
-                    data_to_dump = buffer_list
-                    skipped_n = 0
-                    print(f"[WARN] Buffer too short to skip {frames_to_skip} frames.")
-
-                saved_n = dump_collision_buffer_zero_index(
-                    buffer_data=data_to_dump,
-                    cam_dir=collision_cam_dir,
-                    tof_dir=collision_tof_dir,
+                trigger_reason = "crash" if status_crash == 1 else "manual"
+                handled = handle_collision_dump_and_training(
+                    trigger_reason=trigger_reason,
+                    combined_frame=combined,
                 )
-                print(f"[INFO] Collision dump: saved {saved_n}(skipped {skipped_n}) samples -> {collision_cam_dir.parent}")
-                set_status(f"Saved {saved_n} samples (skipped {skipped_n})(index reset to 0)", seconds=2.5)
-
-                #log crash event
-                crash_log_path = this_dir / "crash_events.log"
-
-                crash_id = time.strftime("%Y%m%d_%H%M%S")
-                
-                last_frame_idx = max(0, saved_n - 1) 
-
-                plot_frames_count = len(plot_history_18s)
-                plot_start_frame = max(1, frame_count - plot_frames_count + 1)
-                plot_end_frame = frame_count
-                
-                collision_end_frame = frame_count-skipped_n
-                collision_start_frame = max(1, frame_count - saved_n + 1)
-                
-                log_msg = (
-                    f"CRASH DUMP TRIGGERED: {crash_id}\n"
-                    f"  - Target: {args.collision_name}/{args.collision_label}\n"
-                    f"  - Total Frames: {saved_n}\n"
-                    f"  - Dumped Files: {args.collision_root}/{args.collision_name} -> 000000.npy to {last_frame_idx:06d}.npy\n"
-                    f"  - Collision Frames: {collision_start_frame} to {collision_end_frame}\n"
-                    f"  - Plot Frames (18s context): {plot_start_frame} to {plot_end_frame}\n"
-                    f"  - Model in use: {current_model_path.name}\n"
-                    f"--------------------------------------------------\n"
-                )
-                
-                try:
-                    with open(crash_log_path, "a", encoding="utf-8") as f:
-                        f.write(log_msg)
-                    print(f"[INFO] Crash event logged to {crash_log_path}")
-                except Exception as e:
-                    print(f"[WARN] Could not write to crash log: {e}")
-
-                img_save_path = this_dir / f"crash_{crash_id}_visual.png"
-                try:
-                    cv2.imwrite(str(img_save_path), combined)
-                except Exception as e:
-                    print(f"[WARN] Failed to save crash visual: {e}")
-
-                # generate the confidence plot
-                plot_save_path = this_dir / f"crash_{crash_id}_plot.pdf"
-                try:
-                    # Extract timestamps and probabilities
-                    t_vals = [item[0] for item in plot_history_18s]
-                    p_vals = [item[1] for item in plot_history_18s]
-                    
-                    # Normalize time so the graph starts at 0.0s
-                    if t_vals:
-                        t0 = t_vals[0]
-                        t_vals = [t - t0 for t in t_vals]
-                    
-                    plot_frames_count = len(t_vals)
-                    plot_start_frame = max(1, frame_count - plot_frames_count + 1)
-                    avg_fps_18s = plot_frames_count / 18.0 if plot_frames_count > 0 else 0.0
-
-                    plt.figure(figsize=(10, 4))
-                    plt.plot(t_vals, p_vals, label="p(gate) EMA", color='#4c72b0') # standard blue
-                    plt.axhline(y=0.5, color='steelblue', linestyle='--', linewidth=1)
-                    plt.ylim(-0.05, 1.05)
-                    
-                    # Match the title and labels from the Vicon table exactly
-                    plt.title(f"Confidence vs Time | frames {plot_start_frame}-{frame_count} @ {avg_fps_18s:.1f} fps", fontsize=10)
-                    plt.xlabel("Tempo [s] (t=0 all frame start)", fontsize=9)
-                    plt.ylabel("p(gate)", fontsize=9)
-                    
-                    plt.grid(True, alpha=0.3)
-                    plt.tight_layout()
-                    plt.savefig(str(plot_save_path), dpi=150)
-                    plt.close()
-                except Exception as e:
-                    print(f"[WARN] Failed to save crash plot: {e}")
-
-                # Start fine-tuning if requested
-                if args.finetune_on_dump:
-                    if not sim_cfg_path.exists():
-                        print(f"[WARN] sim_cfg not found: {sim_cfg_path}")
-                        set_status("Config.json not found for simulation.py", seconds=3.0)
-                        continue
-
-                    try:
-                        train_proc, train_start_wall = start_simulation_subprocess(
-                            repo_root=repo_root,
-                            cfg_path=sim_cfg_path,
-                            log_path=train_log_path,
-                        )
-                        train_start_mon = time.monotonic()
-                        print("================================================================")
-                        print("[OPENCV-VIEWER] TRAINING STARTED (simulation.py)")
-                        print(f"  cfg = {sim_cfg_path}")
-                        print(f"  log = {train_log_path}")
-                        print("================================================================")
-                        set_status("TRAINING STARTED (see log tail in overlay)", seconds=3.0)
-                    except Exception as e:
-                        print(f"[WARN] Failed to start training: {e}")
-                        set_status("Failed to start training (see terminal).", seconds=3.0)
+                if handled and status_crash == 1:
+                    clear_crash_flag()
 
     except KeyboardInterrupt:
         pass
