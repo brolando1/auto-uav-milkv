@@ -110,7 +110,12 @@ def new_packet_received(packet):
             # file_name = round(1000 * (time.time() - time0))
             # save_frame_pair(file_name, save_matrix)
 
-        show_tof_frame(display_matrix)
+        # NOTE: show_tof_frame() calls cv2.imshow/waitKey, but this runs on the
+        # CRTP radio callback thread, NOT the main thread. OpenCV's Qt backend
+        # forbids GUI calls off the main thread, so doing it here blanks every
+        # window. The viewer renders its own ToF panel on the main thread, so
+        # this preview is disabled. Re-enable only from the main thread.
+        # show_tof_frame(display_matrix)
 
 
 def show_tof_frame(tof):

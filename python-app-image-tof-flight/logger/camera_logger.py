@@ -68,7 +68,18 @@ def crazy_camera_logger(time_ref, image_lock):
 
     print("Connecting to socket on {}:{}...".format(deck_ip, deck_port))
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client_socket.connect((deck_ip, deck_port))
+    # Bound the connect so a wrong/unreachable deck IP fails loudly in a few
+    # seconds instead of blocking this thread forever.
+    client_socket.settimeout(5.0)
+    try:
+        client_socket.connect((deck_ip, deck_port))
+    except OSError as e:
+        print(f"[CAMLOG] FAILED to connect to {deck_ip}:{deck_port} ({e}). "
+              f"Check that this PC is on the AI-deck's WiFi, or pass -n <ip>.")
+        client_socket.close()
+        return
+    # Back to blocking mode for the streaming recv loop.
+    client_socket.settimeout(None)
     print("Socket connected")
 
 
@@ -118,13 +129,12 @@ def crazy_camera_logger(time_ref, image_lock):
                 start_col = cols // 2 - (168 // 2)
                 bayer_img_cropped = bayer_img[start_row:start_row + 168, start_col:start_col + 168]
 
-                # Save image
-                image_lock.acquire()
-                np.save('/home/konstantin/computer-in-loop/python-app-image-tof-logger/deep_learning/data/image.npy', bayer_img_cropped)
-                image_lock.release()
-
-                # Show image
-                cv2.imshow('Himax camera image cropped to 168x168', bayer_img_cropped)
+                # (raw-Bayer debug path; the active pipeline uses the JPEG branch below)
+                # NOTE: the np.save pointed at the original author's machine and
+                # crashed this thread on the first frame; cv2.imshow can't be
+                # called here either — this is the CameraThread, not the main
+                # thread, and OpenCV's Qt backend rejects off-main-thread GUI calls.
+                # cv2.imshow('Himax camera image cropped to 168x168', bayer_img_cropped)
 
             else:
               # with open("img.jpeg", "wb") as f:

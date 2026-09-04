@@ -31,7 +31,7 @@ Preprocessing
 Ring-buffer + dataset dump
 --------------------------
 - Keeps last N (camera_norm_168, tof_norm_21) pairs in RAM (paired on CAMERA arrival).
-- On key press (--buffer_key, default 'd'):
+- On key press (--buffer_key, default 't'):
     1) DELETE previous .npy files in collision_dataset target dirs
     2) save current buffer as:
         <collision_root>/<collision_name>/<collision_label>/camera_images/000000.npy ...
@@ -88,6 +88,7 @@ from collections import deque
 from pathlib import Path
 from typing import Deque, List, Optional, Tuple
 import threading
+import keyboard
 import matplotlib.pyplot as plt
 
 
@@ -693,7 +694,7 @@ def crazyflie_viewer(shared_state) -> None:
 
     # Ring-buffer + collision dump
     parser.add_argument("--buffer_n", type=int, default=0, help="Keep last N samples (camera+tof) in RAM. 0 disables.")
-    parser.add_argument("--buffer_key", type=str, default="d", help="Press this key to dump buffered samples to collision_dataset.")
+    parser.add_argument("--buffer_key", type=str, default="t", help="Press this key to dump buffered samples to collision_dataset.")
     parser.add_argument("--save_collision", action="store_true", help="Enable collision dataset dump feature (requires --buffer_n > 0).")
 
     # Continuous recording to another dataset-like directory
@@ -992,8 +993,46 @@ def crazyflie_viewer(shared_state) -> None:
 
         return True
 
+    # -------------------------------------------------------------------------
+    # Global key capture (keyboard hook instead of cv2.waitKey)
+    # cv2.waitKey only sees keys while an OpenCV window has focus; the hook works
+    # regardless of which window is focused. cv2.waitKey(1) is still called every
+    # iteration, but only to pump the GUI event loop so the windows render.
+    # -------------------------------------------------------------------------
+    pending_keys: set = set()
+    pending_keys_lock = threading.Lock()
+    last_key_time: dict = {}
+    KEY_DEBOUNCE_S = 0.4
+
+    def on_key_event(event) -> None:
+        name = getattr(event, "name", None)
+        if not name:
+            return
+        now_k = time.time()
+        # Ignore auto-repeat while a key is held down
+        if now_k - last_key_time.get(name, 0.0) < KEY_DEBOUNCE_S:
+            return
+        last_key_time[name] = now_k
+        with pending_keys_lock:
+            pending_keys.add(name)
+
+    def take_pressed_keys() -> set:
+        with pending_keys_lock:
+            keys = set(pending_keys)
+            pending_keys.clear()
+        return keys
+
+    key_hook = keyboard.on_press(on_key_event)
+    print("[INFO] Key capture: global keyboard hook (works without window focus)")
+
     try:
         while True:
+            # Pump the OpenCV GUI event loop; keys come from the hook, not waitKey
+            cv2.waitKey(1)
+            keys = take_pressed_keys()
+            if "z" in keys:
+                break
+
             pair = None
             with buffer_lock:
                 if len(paired_buffer) > 0:
@@ -1005,15 +1044,19 @@ def crazyflie_viewer(shared_state) -> None:
             
 
             if pair is None:
-                if status_crash == 1:
+                # 'z' is handled at the top of the loop, so it also quits here.
+                manual_dump = (
+                    args.save_collision
+                    and int(args.buffer_n) > 0
+                    and args.buffer_key in keys
+                )
+                if status_crash == 1 or manual_dump:
                     handled = handle_collision_dump_and_training(
-                        trigger_reason="crash",
+                        trigger_reason="crash" if status_crash == 1 else "manual",
                         combined_frame=last_combined_frame,
                     )
-                    if handled:
+                    if handled and status_crash == 1:
                         clear_crash_flag()
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
                 continue
 
             cam_decoded, latest_tof_mm, meta = pair
@@ -1192,7 +1235,7 @@ def crazyflie_viewer(shared_state) -> None:
                 overlay_lines.append("--- simulation.py tail ---")
                 overlay_lines.extend(log_tail)
 
-            keys_line = f"Keys: q=quit, {args.record_start_key}=start_rec, {args.record_stop_key}=stop_rec"
+            keys_line = f"Keys: z=quit, {args.record_start_key}=start_rec, {args.record_stop_key}=stop_rec"
             if args.save_collision and int(args.buffer_n) > 0:
                 keys_line += f", {args.buffer_key}=dump_buffer"
                 if args.finetune_on_dump:
@@ -1257,12 +1300,8 @@ def crazyflie_viewer(shared_state) -> None:
                 )
                 cv2.imshow(args.debug_window, debug_grid)
 
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
-                break
-            
             # Start continuous recording
-            if key == ord(args.record_start_key):
+            if args.record_start_key in keys:
                 if recording_active:
                     set_status("Recording already active.", seconds=2.0)
                 else:
@@ -1280,7 +1319,7 @@ def crazyflie_viewer(shared_state) -> None:
                     set_status(f"Recording started: {session_name}", seconds=2.5)
             
              # Stop continuous recording
-            if key == ord(args.record_stop_key):
+            if args.record_stop_key in keys:
                 if not recording_active:
                     set_status("Recording is not active.", seconds=2.0)
                 else:
@@ -1291,7 +1330,7 @@ def crazyflie_viewer(shared_state) -> None:
 
 
             # --- Dump ring buffer to collision_dataset on key press ---
-            if (args.save_collision and int(args.buffer_n) > 0 and key == ord(args.buffer_key)) or (status_crash == 1):
+            if (args.save_collision and int(args.buffer_n) > 0 and args.buffer_key in keys) or (status_crash == 1):
                 trigger_reason = "crash" if status_crash == 1 else "manual"
                 handled = handle_collision_dump_and_training(
                     trigger_reason=trigger_reason,
@@ -1303,6 +1342,11 @@ def crazyflie_viewer(shared_state) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        try:
+            keyboard.unhook(key_hook)
+        except Exception:
+            pass
+
         # Stop training process if still running
         try:
             if train_proc is not None and train_proc.poll() is None:

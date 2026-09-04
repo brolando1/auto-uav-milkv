@@ -67,8 +67,8 @@ def crazyflie_keyboard_controller(scf, image_lock, tof_lock, shared_state):
 
     # Full pipeline params
     
-    gate_threshold = 0.89
-    forward_vel_multiplier = 1.25
+    gate_threshold = 0.5
+    forward_vel_multiplier = 1.75
 
     # CNN controller
     print("[CONTROLLER] gate nav model init before")
@@ -106,8 +106,21 @@ def crazyflie_keyboard_controller(scf, image_lock, tof_lock, shared_state):
     commander = Commander(scf.cf)
     time.sleep(1)
     commander.send_setpoint(0.0, 0.0, 0.0, 0)
-    print('Delaying takeoff by 10 seconds. Make sure to click onto terminal window. If OpenCv window is focused, a keypress will terminate programm.')
-    time.sleep(10)
+    print('Press SPACE to take off, K to abort. Make sure to click onto terminal window. If OpenCv window is focused, a keypress will terminate programm.')
+    while not keyboard.is_pressed('space'):
+        if keyboard.is_pressed('k'):
+            print('[CONTROLLER] takeoff aborted')
+            commander.send_stop_setpoint()
+            log_conf.stop()
+            return
+        # keep the commander alive while waiting
+        commander.send_setpoint(0.0, 0.0, 0.0, 0)
+        time.sleep(0.05)
+
+    # Wait for release so the keypress does not bleed into the flight loop
+    while keyboard.is_pressed('space'):
+        time.sleep(0.05)
+    print('[CONTROLLER] taking off')
 
     # Slow takeoff to avoid high currents and camera feed cutoff
     current_height = 0.0
@@ -209,7 +222,7 @@ def crazyflie_keyboard_controller(scf, image_lock, tof_lock, shared_state):
                 if last_pred != 'NO':
                     print('NO: ', round(gate_prob * 100, 3), "%")
                 last_pred = 'NO'
-                forward_vel = forward_obstacle_avoidance * 0.7
+                forward_vel = forward_obstacle_avoidance  #* 0.7
                 yaw_rate_rad = yaw_rate_obstacle_avoidance * 2.0
 
             forward_vel = smooth_velocity(last_forward_v, forward_vel, alpha_filter=True, alpha_acc=0.1, alpha_dec=0.3)
