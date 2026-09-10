@@ -1,0 +1,20 @@
+{
+  "source": "gate_navigator_model.tflite (tf2onnx --tflite, opset 13, QDQ int8, node names deduplicated)",
+  "layout": "NHWC uint8 inputs and uint8 output, same tensors as the tflite model",
+  "cam": {
+    "scale": 0.042167432606220245,
+    "zero_point": 52
+  },
+  "tof": {
+    "scale": 0.01802850514650345,
+    "zero_point": 229
+  },
+  "out": {
+    "scale": 0.002914971439167857,
+    "zero_point": 129
+  },
+  "onnxruntime": {
+    "graph_optimization_level": "ORT_ENABLE_BASIC",
+    "why": "EXTENDED/ALL fuse the QDQ pairs into duplicate node names and fail to load"
+  }
+}

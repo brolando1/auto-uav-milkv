@@ -1,0 +1,23 @@
+# Dependencies for the Milk-V Duo S node (python3 -m duos_node.main --fly ...).
+# Networking is stdlib-only, cflib is NOT needed here (the radio bridge on the
+# PC owns the Crazyradio).
+#
+# On the board (Debian 13 riscv64) install these as apt packages, there are no
+# riscv64 wheels on PyPI (see README "Setting up the Duo S"):
+#   sudo apt-get install --no-install-recommends python3-numpy python3-opencv python3-torch python3-torchvision python3-onnxruntime python3-onnx
+#
+# This file is for a PC-side venv (bench tests, running the node on the PC):
+#   pip install -r requirements.txt
+# tflite-runtime only feeds the gate navigator; the node runs without it
+# (yaw_rate stays 0.0, warning at startup). Note tflite-runtime 2.14 needs
+# numpy<2 while opencv-python 5 needs numpy>=2, so on the PC the navigator is
+# usually disabled. env_safety.py already pins BLAS threads to 1 and disables
+# RVV in numpy, no special numpy build needed.
+
+numpy
+opencv-python-headless
+torch
+torchvision
+tflite-runtime
+onnxruntime
+onnx

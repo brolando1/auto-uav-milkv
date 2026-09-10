@@ -1,12 +1,12 @@
-cmd_src/lib/vl53l1/core/src/vl53l1_error_strings.o := arm-none-eabi-gcc -Wp,-MD,src/lib/vl53l1/core/src/.vl53l1_error_strings.o.d    -I/home/phheld/project/crazyflie-firmware/src/lib -Isrc/lib -D__firmware__ -fno-exceptions -Wall -Wmissing-braces -fno-strict-aliasing -ffunction-sections -fdata-sections -Wdouble-promotion -std=gnu11 -DCRAZYFLIE_FW   -I/home/phheld/project/crazyflie-firmware/vendor/CMSIS/CMSIS/Core/Include   -I/home/phheld/project/crazyflie-firmware/vendor/CMSIS/CMSIS/DSP/Include   -I/home/phheld/project/crazyflie-firmware/vendor/libdw1000/inc   -I/home/phheld/project/crazyflie-firmware/vendor/FreeRTOS/include   -I/home/phheld/project/crazyflie-firmware/vendor/FreeRTOS/portable/GCC/ARM_CM4F   -I/home/phheld/project/crazyflie-firmware/src/config   -I/home/phheld/project/crazyflie-firmware/src/platform/interface   -I/home/phheld/project/crazyflie-firmware/src/deck/interface   -I/home/phheld/project/crazyflie-firmware/src/deck/drivers/interface   -I/home/phheld/project/crazyflie-firmware/src/drivers/interface   -I/home/phheld/project/crazyflie-firmware/src/drivers/bosch/interface   -I/home/phheld/project/crazyflie-firmware/src/drivers/esp32/interface   -I/home/phheld/project/crazyflie-firmware/src/hal/interface   -I/home/phheld/project/crazyflie-firmware/src/modules/interface   -I/home/phheld/project/crazyflie-firmware/src/modules/interface/kalman_core   -I/home/phheld/project/crazyflie-firmware/src/modules/interface/lighthouse   -I/home/phheld/project/crazyflie-firmware/src/modules/interface/outlierfilter   -I/home/phheld/project/crazyflie-firmware/src/modules/interface/cpx   -I/home/phheld/project/crazyflie-firmware/src/modules/interface/p2pDTR   -I/home/phheld/project/crazyflie-firmware/src/modules/interface/controller   -I/home/phheld/project/crazyflie-firmware/src/modules/interface/estimator   -I/home/phheld/project/crazyflie-firmware/src/utils/interface   -I/home/phheld/project/crazyflie-firmware/src/utils/interface/kve   -I/home/phheld/project/crazyflie-firmware/src/utils/interface/lighthouse   -I/home/phheld/project/crazyflie-firmware/src/utils/interface/tdoa   -I/home/phheld/project/crazyflie-firmware/src/lib/FatFS   -I/home/phheld/project/crazyflie-firmware/src/lib/CMSIS/STM32F4xx/Include   -I/home/phheld/project/crazyflie-firmware/src/lib/STM32_USB_Device_Library/Core/inc   -I/home/phheld/project/crazyflie-firmware/src/lib/STM32_USB_OTG_Driver/inc   -I/home/phheld/project/crazyflie-firmware/src/lib/STM32F4xx_StdPeriph_Driver/inc   -I/home/phheld/project/crazyflie-firmware/src/lib/vl53l1   -I/home/phheld/project/crazyflie-firmware/src/lib/vl53l1/core/inc   -I/home/phheld/project/tof-camera-logger/app-tof-logger-tof/build/include/generated -fno-delete-null-pointer-checks -Wno-unused-but-set-variable -Wno-unused-const-variable -fomit-frame-pointer -fno-var-tracking-assignments -Wno-pointer-sign -fno-strict-overflow -fconserve-stack -Werror=implicit-int -Werror=date-time -DCC_HAVE_ASM_GOTO -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16 -g3 -fno-math-errno -DARM_MATH_CM4 -D__FPU_PRESENT=1 -mfp16-format=ieee -Wno-array-bounds -Wno-stringop-overread -Wno-stringop-overflow -DSTM32F4XX -DSTM32F40_41xxx -DHSE_VALUE=8000000 -DUSE_STDPERIPH_DRIVER -Os -Werror  -I/home/phheld/project/crazyflie-firmware/src -Isrc   -c -o src/lib/vl53l1/core/src/vl53l1_error_strings.o /home/phheld/project/crazyflie-firmware/src/lib/vl53l1/core/src/vl53l1_error_strings.c
+cmd_src/lib/vl53l1/core/src/vl53l1_error_strings.o := arm-none-eabi-gcc -Wp,-MD,src/lib/vl53l1/core/src/.vl53l1_error_strings.o.d    -I/home/broland/auto-uav/crazyflie-firmware/src/lib -Isrc/lib -D__firmware__ -fno-exceptions -Wall -Wmissing-braces -fno-strict-aliasing -ffunction-sections -fdata-sections -Wdouble-promotion -std=gnu11 -DCRAZYFLIE_FW   -I/home/broland/auto-uav/crazyflie-firmware/vendor/CMSIS/CMSIS/Core/Include   -I/home/broland/auto-uav/crazyflie-firmware/vendor/CMSIS/CMSIS/DSP/Include   -I/home/broland/auto-uav/crazyflie-firmware/vendor/libdw1000/inc   -I/home/broland/auto-uav/crazyflie-firmware/vendor/FreeRTOS/include   -I/home/broland/auto-uav/crazyflie-firmware/vendor/FreeRTOS/portable/GCC/ARM_CM4F   -I/home/broland/auto-uav/crazyflie-firmware/src/config   -I/home/broland/auto-uav/crazyflie-firmware/src/platform/interface   -I/home/broland/auto-uav/crazyflie-firmware/src/deck/interface   -I/home/broland/auto-uav/crazyflie-firmware/src/deck/drivers/interface   -I/home/broland/auto-uav/crazyflie-firmware/src/drivers/interface   -I/home/broland/auto-uav/crazyflie-firmware/src/drivers/bosch/interface   -I/home/broland/auto-uav/crazyflie-firmware/src/drivers/esp32/interface   -I/home/broland/auto-uav/crazyflie-firmware/src/hal/interface   -I/home/broland/auto-uav/crazyflie-firmware/src/modules/interface   -I/home/broland/auto-uav/crazyflie-firmware/src/modules/interface/kalman_core   -I/home/broland/auto-uav/crazyflie-firmware/src/modules/interface/lighthouse   -I/home/broland/auto-uav/crazyflie-firmware/src/modules/interface/outlierfilter   -I/home/broland/auto-uav/crazyflie-firmware/src/modules/interface/cpx   -I/home/broland/auto-uav/crazyflie-firmware/src/modules/interface/p2pDTR   -I/home/broland/auto-uav/crazyflie-firmware/src/modules/interface/controller   -I/home/broland/auto-uav/crazyflie-firmware/src/modules/interface/estimator   -I/home/broland/auto-uav/crazyflie-firmware/src/utils/interface   -I/home/broland/auto-uav/crazyflie-firmware/src/utils/interface/kve   -I/home/broland/auto-uav/crazyflie-firmware/src/utils/interface/lighthouse   -I/home/broland/auto-uav/crazyflie-firmware/src/utils/interface/tdoa   -I/home/broland/auto-uav/crazyflie-firmware/src/lib/FatFS   -I/home/broland/auto-uav/crazyflie-firmware/src/lib/CMSIS/STM32F4xx/Include   -I/home/broland/auto-uav/crazyflie-firmware/src/lib/STM32_USB_Device_Library/Core/inc   -I/home/broland/auto-uav/crazyflie-firmware/src/lib/STM32_USB_OTG_Driver/inc   -I/home/broland/auto-uav/crazyflie-firmware/src/lib/STM32F4xx_StdPeriph_Driver/inc   -I/home/broland/auto-uav/crazyflie-firmware/src/lib/vl53l1   -I/home/broland/auto-uav/crazyflie-firmware/src/lib/vl53l1/core/inc   -I/home/broland/Desktop/milkv-drone/app-tof-logger-tof/build/include/generated -fno-delete-null-pointer-checks -Wno-unused-but-set-variable -Wno-unused-const-variable -fomit-frame-pointer -fno-var-tracking-assignments -Wno-pointer-sign -fno-strict-overflow -fconserve-stack -Werror=implicit-int -Werror=date-time -DCC_HAVE_ASM_GOTO -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16 -g3 -fno-math-errno -DARM_MATH_CM4 -D__FPU_PRESENT=1 -mfp16-format=ieee -Wno-array-bounds -Wno-stringop-overread -Wno-stringop-overflow -DSTM32F4XX -DSTM32F40_41xxx -DHSE_VALUE=8000000 -DUSE_STDPERIPH_DRIVER -Os -Werror  -I/home/broland/auto-uav/crazyflie-firmware/src -Isrc -DTOF_OVER_CPX   -c -o src/lib/vl53l1/core/src/vl53l1_error_strings.o /home/broland/auto-uav/crazyflie-firmware/src/lib/vl53l1/core/src/vl53l1_error_strings.c
 
-source_src/lib/vl53l1/core/src/vl53l1_error_strings.o := /home/phheld/project/crazyflie-firmware/src/lib/vl53l1/core/src/vl53l1_error_strings.c
+source_src/lib/vl53l1/core/src/vl53l1_error_strings.o := /home/broland/auto-uav/crazyflie-firmware/src/lib/vl53l1/core/src/vl53l1_error_strings.c
 
 deps_src/lib/vl53l1/core/src/vl53l1_error_strings.o := \
-  /home/phheld/project/crazyflie-firmware/src/lib/vl53l1/core/inc/vl53l1_error_codes.h \
-  /home/phheld/project/crazyflie-firmware/src/lib/vl53l1/vl53l1_types.h \
-  /usr/lib/gcc/arm-none-eabi/13.2.1/include/stdint.h \
-  /usr/lib/gcc/arm-none-eabi/13.2.1/include/stddef.h \
+  /home/broland/auto-uav/crazyflie-firmware/src/lib/vl53l1/core/inc/vl53l1_error_codes.h \
+  /home/broland/auto-uav/crazyflie-firmware/src/lib/vl53l1/vl53l1_types.h \
+  /usr/lib/gcc/arm-none-eabi/10.3.1/include/stdint.h \
+  /usr/lib/gcc/arm-none-eabi/10.3.1/include/stddef.h \
   /usr/include/newlib/string.h \
   /usr/include/newlib/_ansi.h \
   /usr/include/newlib/newlib.h \
@@ -17,25 +17,37 @@ deps_src/lib/vl53l1/core/src/vl53l1_error_strings.o := \
   /usr/include/newlib/sys/features.h \
   /usr/include/newlib/sys/reent.h \
   /usr/include/newlib/_ansi.h \
-  /usr/include/newlib/sys/cdefs.h \
-  /usr/include/newlib/machine/_default_types.h \
   /usr/include/newlib/sys/_types.h \
   /usr/include/newlib/machine/_types.h \
+  /usr/include/newlib/machine/_default_types.h \
   /usr/include/newlib/sys/lock.h \
+  /usr/include/newlib/sys/cdefs.h \
   /usr/include/newlib/sys/_locale.h \
   /usr/include/newlib/strings.h \
   /usr/include/newlib/sys/string.h \
   /usr/include/newlib/stdio.h \
-  /usr/lib/gcc/arm-none-eabi/13.2.1/include/stdarg.h \
+  /usr/lib/gcc/arm-none-eabi/10.3.1/include/stdarg.h \
+  /usr/include/newlib/sys/types.h \
+  /usr/include/newlib/sys/_stdint.h \
+  /usr/include/newlib/machine/endian.h \
+  /usr/include/newlib/machine/_endian.h \
+  /usr/include/newlib/sys/select.h \
+  /usr/include/newlib/sys/_sigset.h \
+  /usr/include/newlib/sys/_timeval.h \
+  /usr/include/newlib/sys/timespec.h \
+  /usr/include/newlib/sys/_timespec.h \
+  /usr/include/newlib/sys/_pthreadtypes.h \
+  /usr/include/newlib/sys/sched.h \
+  /usr/include/newlib/machine/types.h \
   /usr/include/newlib/sys/stdio.h \
   /usr/include/newlib/stdlib.h \
   /usr/include/newlib/machine/stdlib.h \
   /usr/include/newlib/alloca.h \
-  /home/phheld/project/crazyflie-firmware/src/lib/vl53l1/core/inc/vl53l1_error_strings.h \
-  /home/phheld/project/crazyflie-firmware/src/lib/vl53l1/core/inc/vl53l1_error_codes.h \
-  /home/phheld/project/crazyflie-firmware/src/lib/vl53l1/vl53l1_platform_log.h \
-  /home/phheld/project/crazyflie-firmware/src/lib/vl53l1/core/inc/vl53l1_ll_def.h \
-  /home/phheld/project/crazyflie-firmware/src/lib/vl53l1/core/inc/vl53l1_ll_device.h \
+  /home/broland/auto-uav/crazyflie-firmware/src/lib/vl53l1/core/inc/vl53l1_error_strings.h \
+  /home/broland/auto-uav/crazyflie-firmware/src/lib/vl53l1/core/inc/vl53l1_error_codes.h \
+  /home/broland/auto-uav/crazyflie-firmware/src/lib/vl53l1/vl53l1_platform_log.h \
+  /home/broland/auto-uav/crazyflie-firmware/src/lib/vl53l1/core/inc/vl53l1_ll_def.h \
+  /home/broland/auto-uav/crazyflie-firmware/src/lib/vl53l1/core/inc/vl53l1_ll_device.h \
     $(wildcard include/config/vhv.h) \
     $(wildcard include/config/phasecal.h) \
     $(wildcard include/config/reference/phase.h) \
@@ -46,9 +58,9 @@ deps_src/lib/vl53l1/core/src/vl53l1_error_strings.o := \
     $(wildcard include/config/range.h) \
     $(wildcard include/config/timeout/us.h) \
     $(wildcard include/config/target/total/rate/mcps.h) \
-  /home/phheld/project/crazyflie-firmware/src/lib/vl53l1/vl53l1_platform_user_config.h \
+  /home/broland/auto-uav/crazyflie-firmware/src/lib/vl53l1/vl53l1_platform_user_config.h \
     $(wildcard include/config/h/.h) \
-  /home/phheld/project/crazyflie-firmware/src/lib/vl53l1/core/inc/vl53l1_register_structs.h \
+  /home/broland/auto-uav/crazyflie-firmware/src/lib/vl53l1/core/inc/vl53l1_register_structs.h \
     $(wildcard include/config//spad/enables/ref/0.h) \
     $(wildcard include/config/i2c/index.h) \
     $(wildcard include/config//target/total/rate/mcps.h) \
@@ -56,7 +68,7 @@ deps_src/lib/vl53l1/core/src/vl53l1_error_strings.o := \
     $(wildcard include/config//timeout/macrop/a/hi.h) \
     $(wildcard include/config//roi/mode/control.h) \
     $(wildcard include/config/i2c/size/bytes.h) \
-  /home/phheld/project/crazyflie-firmware/src/lib/vl53l1/core/inc/vl53l1_register_map.h \
+  /home/broland/auto-uav/crazyflie-firmware/src/lib/vl53l1/core/inc/vl53l1_register_map.h \
     $(wildcard include/config//vhv/ref/sel/vddpix.h) \
     $(wildcard include/config//vhv/ref/sel/vquench.h) \
     $(wildcard include/config//reg/avdd1v2/sel.h) \
@@ -173,8 +185,8 @@ deps_src/lib/vl53l1/core/src/vl53l1_error_strings.o := \
     $(wildcard include/config//mode/roi/centre/spad.h) \
     $(wildcard include/config//mode/roi/xy/size.h) \
     $(wildcard include/config//a0.h) \
-  /home/phheld/project/crazyflie-firmware/src/lib/vl53l1/vl53l1_platform_user_defines.h \
-  /home/phheld/project/crazyflie-firmware/src/lib/vl53l1/core/inc/vl53l1_error_exceptions.h \
+  /home/broland/auto-uav/crazyflie-firmware/src/lib/vl53l1/vl53l1_platform_user_defines.h \
+  /home/broland/auto-uav/crazyflie-firmware/src/lib/vl53l1/core/inc/vl53l1_error_exceptions.h \
 
 src/lib/vl53l1/core/src/vl53l1_error_strings.o: $(deps_src/lib/vl53l1/core/src/vl53l1_error_strings.o)
 

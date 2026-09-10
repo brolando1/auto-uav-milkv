@@ -1,0 +1,10 @@
+# Dependencies for the PC ground station (sudo -E python -m pc_node.main ...).
+#   pip install -r requirements.txt
+# keyboard needs root for the global hotkeys, hence sudo -E; the Crazyradio
+# needs the usual udev rules / libusb like with cfclient.
+
+numpy
+opencv-python
+cflib
+keyboard
+matplotlib

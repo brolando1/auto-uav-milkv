@@ -1,0 +1,3 @@
+# outputs of tools/tof_wifi_check.sh
+tof_check_*.log
+venv/

@@ -1,0 +1,21 @@
+# wlan0: managed by ifupdown + wpa_supplicant. Networks (drone AP first, hotspot
+# as fallback) live in /etc/wpa_supplicant/wpa_supplicant-wlan0.conf; do NOT put
+# wpa-essid/wpa-psk here, that replaces the whole list with one network.
+allow-hotplug wlan0
+iface wlan0 inet dhcp
+	wpa-conf /etc/wpa_supplicant/wpa_supplicant-wlan0.conf
+====
+ctrl_interface=/var/run/wpa_supplicant
+# AI-deck access point created by the GAP8 streamer (open network, deck at 192.168.4.1)
+network={
+	ssid="WiFi streaming example"
+	key_mgmt=NONE
+	scan_ssid=1
+	priority=10
+}
+# previous hotspot, kept as fallback
+network={
+	ssid="PewPew"
+	psk="<hotspot password>"
+	priority=1
+}
