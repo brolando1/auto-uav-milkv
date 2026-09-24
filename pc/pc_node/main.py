@@ -36,7 +36,7 @@ KEY_SEND_PERIOD_S = 0.033
 
 
 def keyboard_command_sender(link, bridge_holder):
-    # global hotkeys like the old controller -> needs sudo
+    # global hotkeys, needs sudo
     import keyboard
     print(f"[KEYS] Forwarding {FORWARDED_KEYS} to the Duo S ({1.0 / KEY_SEND_PERIOD_S:.0f} Hz)")
     while not stop_event.is_set():

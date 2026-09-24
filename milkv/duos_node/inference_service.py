@@ -1,9 +1,7 @@
-# Runs both models on the Duo S: the PyTorch GateClassifier (p_gate, was in the
-# viewer thread) and the TFLite GateNavigator (yaw rate, was in the control
-# thread). Results go to the PC as STATE frames.
+# Inference loop on the Duo S: gate classifier (p_gate) and gate navigator
+# (yaw rate) on every paired camera/ToF frame. Results go to the PC as STATE frames.
 
 import threading
-from collections import deque
 import time
 from pathlib import Path
 
@@ -18,7 +16,6 @@ from training_quantization.continual_learning.runtime_utils import (
     onnx_sibling,
     onnx_is_fresh,
     load_gate_model,
-    infer_gate_probability,
 )
 
 from common import protocol
@@ -32,8 +29,7 @@ class ModelManager:
     def __init__(self, ckpt_path, device, latent_tap="post_comb1", classifier_backend="onnx"):
         self.device = device
         self.latent_tap = latent_tap    # same tap the finetune trains from (config.json)
-        # "onnx": run the checkpoint's .onnx sibling with onnxruntime (~3.5x
-        # faster than torch on the Duo S, same numbers); "torch": plain torch.
+        # "onnx": run the checkpoint's .onnx sibling with onnxruntime, "torch": plain torch
         self.classifier_backend = classifier_backend if classifier_backend in ("onnx", "torch") else "onnx"
         self._lock = threading.Lock()
         self.model = None               # torch model: fingerprint, and inference fallback
@@ -90,71 +86,6 @@ class ModelManager:
         return p, z, fp
 
 
-class StageTimer:
-    """Rolling per-stage timings of the inference loop (ms), reported in STATE
-    as mean / p95 over the last `window` frames so the PC can collect proper
-    statistics without touching the board."""
-
-    def __init__(self, window=300):
-        self._lock = threading.Lock()
-        self._window = int(window)
-        self._d = {}
-        self._cache = ({}, 0.0)
-
-    def record(self, name, ms):
-        with self._lock:
-            dq = self._d.get(name)
-            if dq is None:
-                dq = self._d[name] = deque(maxlen=self._window)
-            dq.append(float(ms))
-
-    def summary(self, max_age_s=1.0):
-        now = time.monotonic()
-        cached, t = self._cache
-        if now - t < max_age_s:
-            return cached
-        out = {}
-        with self._lock:
-            for name, dq in self._d.items():
-                if not dq:
-                    continue
-                v = sorted(dq)
-                out[name] = {"mean": round(sum(v) / len(v), 2),
-                             "p95": round(v[int(0.95 * (len(v) - 1))], 2),
-                             "n": len(v)}
-        self._cache = (out, now)
-        return out
-
-
-def _proc_mem_mb(pid="self"):
-    """VmRSS / VmHWM (peak RSS) of a process in MB, or None if it is gone."""
-    try:
-        rss = hwm = None
-        with open(f"/proc/{pid}/status") as f:
-            for line in f:
-                if line.startswith("VmRSS:"):
-                    rss = int(line.split()[1]) / 1024.0
-                elif line.startswith("VmHWM:"):
-                    hwm = int(line.split()[1]) / 1024.0
-        return {"rss": round(rss, 1) if rss is not None else None,
-                "peak": round(hwm, 1) if hwm is not None else None}
-    except OSError:
-        return None
-
-
-def _system_mem_mb():
-    try:
-        m = {}
-        with open("/proc/meminfo") as f:
-            for line in f:
-                k, v = line.split(":", 1)
-                m[k] = int(v.split()[0]) / 1024.0
-        return {"total": round(m["MemTotal"], 1), "available": round(m["MemAvailable"], 1),
-                "swap_used": round(m["SwapTotal"] - m["SwapFree"], 1)}
-    except (OSError, KeyError):
-        return None
-
-
 class InferenceService:
     def __init__(self, *, pairer, model_manager, pred_filter, ema_filter,
                  orchestrator, pc_link, cpx_link, thr=0.5, cam_preproc="crop",
@@ -179,16 +110,13 @@ class InferenceService:
         self.navigator_every = max(1, int(navigator_every))
         self._nav_frames_needed = 0   # frames since the navigator became needed
         self._last_yaw_rate = 0.0
-        # 'always': the navigator runs (decimated) on every frame so the frame
-        # rate does not change with the flight mode / gate; its yaw is handed
-        # to the controller only when _navigator_needed(). 'gated': old
-        # behaviour, it is only computed when needed.
+        # 'always': the navigator runs on every frame (constant frame rate), its yaw
+        # is handed to the controller only when _navigator_needed(). 'gated': it
+        # only runs when needed.
         self.navigator_mode = navigator_mode if navigator_mode in ("always", "gated") else "always"
-        self.timing = StageTimer()
-        self._mem = ({}, 0.0)
 
-        # needs tflite_runtime (or full TF as fallback); keep going without the
-        # navigator so the classifier/relay still work if neither is installed
+        # keep going without the navigator (no tflite/onnxruntime backend) so the
+        # classifier and the relay still work
         self.navigator = None
         try:
             from training_quantization.inference_gate_navigator_in_loop import InferenceGateNavigatorInLoop
@@ -223,23 +151,17 @@ class InferenceService:
             print(f"[INFER] Debug inputs failed: {e}")
 
     def _navigator_needed(self, p_gate_ema):
-        # The controller uses the navigator's yaw only in auto mode and only
-        # while p(gate) >= GATE_THRESHOLD (otherwise ToF obstacle avoidance
-        # steers), so the ~55 ms are spent only then. Sensing-only runs
-        # (no drone) keep it for the viewer.
+        # the controller uses the navigator's yaw only in auto mode while
+        # p(gate) >= GATE_THRESHOLD; sensing-only runs (no drone) keep it for the viewer
         fs = self.flight_status
         if fs is None or fs.get('state') == 'no_drone':
             return True
         return bool(fs.get('auto')) and p_gate_ema >= GATE_THRESHOLD
 
     def _yield_to_training(self):
-        # While a finetune child runs the single core belongs to the training:
-        # idle this loop to ~1 Hz (one classifier+navigator pass costs ~200 ms,
-        # at 5 Hz the node still took half the core). The only exception is
-        # autonomous flight: there the controller consumes the predictions and
-        # its stale-prediction watchdog would hover/land the drone within 2 s.
-        # Manual flight (keys) and everything on the ground (crash, landed,
-        # armed, no --fly) are throttled. The fork happens before the first sleep.
+        # while a finetune child runs, idle this loop to ~1 Hz so the training gets
+        # the core. Not in autonomous flight: there the controller needs the
+        # predictions, its watchdog would land the drone otherwise.
         if self.orchestrator.train_proc is None:
             return
         fs = self.flight_status if self.flight_status is not None else {}
@@ -258,8 +180,6 @@ class InferenceService:
                 continue
 
             cam_decoded, tof_mm, tof_validity, tof_meta, _jpeg, cam_seq = pair
-            t_arrival = self.pairer.last_t_mon
-            t_loop0 = time.perf_counter()
             self._frame_count += 1
 
             try:
@@ -268,38 +188,23 @@ class InferenceService:
                 print(f"[INFER] Camera preprocessing failed: {e}")
                 continue
             tof_norm = tof_preprocessing.tof_norm_21x21_from_8x8_mm(tof_mm)
-            t1 = time.perf_counter()
-            self.timing.record("preprocess", (t1 - t_loop0) * 1000.0)
 
             if time.monotonic() < self.debug_until:
                 self._publish_debug_inputs(cam_decoded, tof_norm, cam_seq)
 
             # classifier -> p_gate (raw -> median -> ema, same as the viewer)
-            t1 = time.perf_counter()
             p_gate_raw, latent, encoder_fp = self.model_manager.infer(cam_norm, tof_norm)
-            t2 = time.perf_counter()
-            self.timing.record("classifier", (t2 - t1) * 1000.0)
 
             # ring buffer (+ latent for the finetune) + continuous recording
             self.orchestrator.on_pair(cam_norm, tof_norm, latent=latent, encoder_fp=encoder_fp)
             p_gate_med = self.pred_filter.update(p_gate_raw)
             p_gate_ema = self.ema_filter.update(p_gate_med)
             pred = "GATE" if p_gate_ema >= self.thr else "NO_GATE"
-            t3 = time.perf_counter()
-            self.timing.record("buffer_filters", (t3 - t2) * 1000.0)
 
-            # navigator -> yaw rate (rad/s, scaling stays in the PC control loop).
-            # Its ~50 ms only buy something in autonomous mode (the controller
-            # ignores yaw_rate otherwise) and in sensing-only runs (no drone),
-            # where the viewer shows it; skipped in manual flight / on the ground.
-            # With navigator_every=2 it runs on the first frame the gate is
-            # needed on and then on every second one; the frames in between
-            # reuse the last yaw rate, so the classifier keeps its full rate.
-            # navigator_mode 'always' computes it on every frame (constant frame
-            # rate), 'gated' only when the controller will use it.
+            # navigator -> yaw rate (rad/s). Runs on every navigator_every-th frame,
+            # the frames in between reuse the last yaw rate.
             yaw_needed = self._navigator_needed(p_gate_ema)
             yaw_rate = 0.0
-            t3 = time.perf_counter()
             if self.navigator is not None and (yaw_needed or self.navigator_mode == "always"):
                 if self._nav_frames_needed % self.navigator_every == 0:
                     try:
@@ -312,7 +217,6 @@ class InferenceService:
                             self._last_yaw_rate = float(self.navigator.predict_navigation()[0])
                     except Exception as e:
                         print(f"[INFER] Navigator failed: {e}")
-                    self.timing.record("navigator_run", (time.perf_counter() - t3) * 1000.0)
                 self._nav_frames_needed += 1
                 yaw_rate = self._last_yaw_rate
             else:
@@ -320,16 +224,12 @@ class InferenceService:
                 # navigator runs again on the very first frame it is needed
                 self._nav_frames_needed = 0
                 self._last_yaw_rate = 0.0
-            t4 = time.perf_counter()
-            self.timing.record("navigator_per_frame", (t4 - t3) * 1000.0)
 
             if self.flight_data is not None:
                 # the controller only ever gets a yaw it may act on
                 self.flight_data.set_prediction(p_gate_ema, yaw_rate if yaw_needed else 0.0)
 
             self.orchestrator.poll_training()
-            t5 = time.perf_counter()
-            self.timing.record("poll_training", (t5 - t4) * 1000.0)
 
             now = time.time()
             dt = now - self._last_time
@@ -361,30 +261,10 @@ class InferenceService:
                 "echo_t_pc": self.echo_t_pc,
                 "training": self.orchestrator.training_status(),
                 "flight": self._flight_state(),
-                "timing_ms": self.timing.summary(),
-                "mem_mb": self._mem_snapshot(),
             }
-            t6 = time.perf_counter()
-            self.timing.record("state_build", (t6 - t5) * 1000.0)
             self.pc_link.publish(protocol.FRAME_STATE, protocol.encode_json(state))
-            t7 = time.perf_counter()
-            self.timing.record("publish", (t7 - t6) * 1000.0)
-            self.timing.record("loop_total", (t7 - t_loop0) * 1000.0)
-            if t_arrival is not None:
-                # camera frame decoded & paired -> prediction published
-                self.timing.record("latency_arrival_to_state", (time.monotonic() - t_arrival) * 1000.0)
 
         print("[INFER] Inference loop stopped")
-
-    def _mem_snapshot(self, max_age_s=1.0):
-        cached, t = self._mem
-        now = time.monotonic()
-        if now - t < max_age_s:
-            return cached
-        snap = {"node": _proc_mem_mb("self"), "system": _system_mem_mb(),
-                "training": self.orchestrator.training_mem()}
-        self._mem = (snap, now)
-        return snap
 
     def _flight_state(self):
         if self.flight_status is None:

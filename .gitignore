@@ -1,3 +1,8 @@
 # outputs of tools/tof_wifi_check.sh
 tof_check_*.log
 venv/
+.DS_Store
+__pycache__/
+*.pyc
+app-tof-logger-tof/build/
+pc/crash_events/

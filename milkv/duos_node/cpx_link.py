@@ -1,7 +1,6 @@
 # Reader for the AI-deck socket (single TCP client on 192.168.4.1:5000).
 # Both the GAP8 (jpeg stream) and the STM32 (ToF via TOF_OVER_CPX) end up on
-# this socket, so unlike the old PC camera logger we have to demux on the CPX source
-# field instead of assuming everything is image traffic.
+# this socket, demuxed on the CPX source field.
 
 import socket
 import struct

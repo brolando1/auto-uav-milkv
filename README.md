@@ -24,7 +24,7 @@ PC ----- keys (space/i/wasd/qe/op/k) / telemetry / dump / record / ping -> Duo S
 |---|---|---|
 | `milkv/` | Duo S | `duos_node/` node, `common/` protocol + obstacle avoidance, `training_quantization/` models and training pipeline |
 | `pc/` | PC | `pc_node/` radio bridge, viewer, keyboard, link client |
-| `tools/` | PC | deploy, measurement and drone check scripts, `duos/` scripts for the board |
+| `tools/` | PC | deploy and drone check scripts, `duos/` the wifi fix for the board |
 | `app-tof-logger-tof/` | Crazyflie STM32 | ToF firmware |
 | `wifi-img-streamer/`, `lib/` | AI-deck GAP8 | camera streamer |
 
@@ -203,4 +203,3 @@ Drone checks without the Duo S (PC on the drone wifi, Crazyradio plugged in, fro
 - The finetune is forked from the node process (torch and model already loaded, starts in < 1 s). It trains on the latents the node stored with each buffered frame (`latents.npy`), only the layers after the latent tap, and recomputes if the tap or encoder fingerprint does not match.
 - Replay latents of the Stargate dataset are built once in `continual_learning/original_dataset/` (a few minutes on the board). Pipeline config: `continual_learning/config.json`.
 - CPX watchdog: 3 s without data counts as disconnected, the node reconnects.
-- The node publishes per-stage timings and memory use in its state stream. `tools/measure_duos.py` collects them from the PC, `tools/duos/bench_frame.py` and `python3 -m duos_node.bench_standalone` measure on the board.

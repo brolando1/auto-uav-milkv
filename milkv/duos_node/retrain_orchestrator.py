@@ -1,13 +1,9 @@
-# Crash -> dump -> finetune -> hot-swap machinery, ported from the viewer
-# (the old opencv_viewer.py, handle_collision_dump_and_training) so it runs
-# headless on the Duo S. The trigger now comes straight from the local flight
-# controller ('crash') or as a command from the PC ('dump' = viewer key)
-# instead of a local key press / shared_state flag.
+# Crash -> dump -> finetune -> hot-swap on the Duo S. Triggered by the flight
+# controller ('crash') or by a command from the PC ('dump' = viewer key).
 #
-# The crash visual png + the 18 s p(gate) plot pdf are produced by the PC
-# viewer (it has the display and matplotlib): every dump is reported in the
-# STATE frame via training_status()['last_dump'] and pc_node/display_viewer.py
-# writes the files when it sees a new one.
+# The crash visual png and the p(gate) plot pdf are written by the PC viewer:
+# every dump is reported in the STATE frame (training_status()['last_dump']) and
+# pc_node/display_viewer.py saves the files when it sees a new one.
 
 import threading
 import time
@@ -70,22 +66,17 @@ class RetrainOrchestrator:
 
         self._lock = threading.Lock()
         self.train_proc = None
-        self.train_mem = {}
-        self._train_mem_t = 0.0
-        self.last_train_peak_mb = None
-        self.last_train_elapsed = None
         self.train_start_wall = None
         self.train_start_mon = None
 
         # "fork": the training child is forked off this process by the
         # inference thread (torch already loaded, see start_simulation_forked).
-        # "subprocess": fresh interpreter (slow on the Duo S, always safe).
+        # "subprocess": fresh interpreter.
         self.train_launcher = train_launcher if train_launcher in ("fork", "subprocess") else "fork"
         self._fork_pending_since = None          # monotonic time of a queued fork
         self._fork_fallback_after_s = 10.0       # no inference thread around -> subprocess
 
-        # a dump requested while a training is running is handled after it
-        # finishes (same as the viewer's "dump deferred")
+        # a dump requested while a training is running is handled after it finishes
         self.pending_dump = None
 
         # last dump, relayed to the PC so it can save the visual + plot
@@ -147,8 +138,8 @@ class RetrainOrchestrator:
     # 'crash' from the flight controller or 'dump' from the viewer key
     def trigger_dump(self, source="dump"):
         with self._lock:
-            # Like the viewer: a trigger during a running training is kept
-            # pending and handled once the subprocess finishes.
+            # a trigger during a running training is kept pending and handled
+            # once the training finishes
             if self.train_proc is not None:
                 self.pending_dump = source
                 self._set_status("Training already running: dump deferred.", 2.0)
@@ -294,35 +285,7 @@ class RetrainOrchestrator:
             self._launch_locked("subprocess")
 
     # called periodically from the inference loop; hot-swaps the model when the
-    # subprocess finishes (same flow as the viewer's non-blocking poll)
-    def _sample_train_mem_locked(self):
-        # RSS / peak RSS of the running training child (from /proc), ~2 Hz
-        proc = self.train_proc
-        if proc is None:
-            return
-        now = time.monotonic()
-        if now - self._train_mem_t < 0.5:
-            return
-        self._train_mem_t = now
-        try:
-            rss = hwm = None
-            with open(f"/proc/{proc.pid}/status") as f:
-                for line in f:
-                    if line.startswith("VmRSS:"):
-                        rss = int(line.split()[1]) / 1024.0
-                    elif line.startswith("VmHWM:"):
-                        hwm = int(line.split()[1]) / 1024.0
-            if rss is not None:
-                self.train_mem = {"rss": round(rss, 1), "peak": round(hwm or rss, 1)}
-        except OSError:
-            pass
-
-    def training_mem(self):
-        with self._lock:
-            return {"running": self.train_mem if self.train_proc is not None else None,
-                    "last_peak": self.last_train_peak_mb,
-                    "last_elapsed": self.last_train_elapsed}
-
+    # training finishes
     def poll_training(self):
         # called only by the inference thread, at points where it is outside
         # torch/cv2: this is where a queued fork is executed
@@ -330,19 +293,15 @@ class RetrainOrchestrator:
             self._service_pending_fork_locked(from_inference_thread=True)
             if self.train_proc is None:
                 return
-            self._sample_train_mem_locked()
             rc = self.train_proc.poll()
             if rc is None:
                 return
-            if self.train_mem:
-                self.last_train_peak_mb = self.train_mem.get("peak")
 
             close_simulation_log_handle(self.train_proc)
             elapsed = 0.0
             if self.train_start_mon is not None:
                 elapsed = time.monotonic() - self.train_start_mon
             self._set_status(f"TRAINING: finished rc={rc} ({elapsed:.1f}s)", 3.0)
-            self.last_train_elapsed = round(elapsed, 2)
 
             after = self.train_start_wall if self.train_start_wall is not None else time.time()
             self.train_proc = None

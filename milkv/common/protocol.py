@@ -138,8 +138,7 @@ def decode_debug(payload):
 
 
 def tof_arrays_from_raw(dist_bytes, status_bytes):
-    # Same rules as the old radio ToF handler: status 5/9 is valid,
-    # invalid pixels get clamped to 3000mm (our defined max range of 3.0m)
+    # status 5/9 is valid, invalid pixels get clamped to 3000mm (max range 3.0m)
     distances = np.frombuffer(dist_bytes, dtype='<u2').astype(np.float32).reshape(8, 8)
     status = np.frombuffer(status_bytes, dtype=np.uint8).reshape(8, 8)
     validity = (status == 5) | (status == 9)

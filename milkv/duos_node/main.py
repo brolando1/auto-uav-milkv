@@ -176,10 +176,7 @@ def main():
         # relay to the PC first so the viewer doesn't depend on inference speed
         pc_link.publish(protocol.FRAME_JPEG, protocol.encode_jpeg(seq, time.monotonic(), jpeg_bytes))
         nparr = np.frombuffer(jpeg_bytes, np.uint8)
-        t0 = time.perf_counter()
         decoded = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
-        if service is not None:
-            service.timing.record("jpeg_decode", (time.perf_counter() - t0) * 1000.0)
         pairer.on_camera(decoded, jpeg_bytes, seq)
 
     def on_tof(package):

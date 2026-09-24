@@ -1,17 +1,15 @@
-# Display-only replacement for crazyflie_viewer when inference runs on the
-# Duo S. Same windows/overlay as the old local viewer, but all numbers come from
-# the received STATE frames and the keys turn into commands to the Duo S.
+# Viewer on the PC. All numbers come from the STATE frames of the Duo S, the
+# keys turn into commands to the Duo S.
 #
-# Keys come from a global keyboard hook, like the old local viewer did it
-# (cv2.waitKey only sees keys while an OpenCV window has focus):
+# Keys come from a global keyboard hook (cv2.waitKey only sees keys while an
+# OpenCV window has focus):
 #   z = quit viewer, t = dump+finetune (--buffer_key), r = record start,
 #   b = record stop. The flight keys are forwarded by pc_node/main.py.
 #
-# The dump + retraining happen on the Duo S, but the crash visual png and the
-# 18 s p(gate) plot pdf are still written here (this side has the display and
-# matplotlib) into pc/crash_events/: the
-# STATE frame reports every dump (training.last_dump) and the viewer reacts to
-# it even when no camera frame is arriving.
+# The dump and the retraining happen on the Duo S, the crash visual png and the
+# 18 s p(gate) plot pdf are written here into pc/crash_events/: the STATE frame
+# reports every dump (training.last_dump) and the viewer reacts to it even when
+# no camera frame is arriving.
 
 import argparse
 import threading
@@ -64,7 +62,7 @@ def remote_viewer(shared_state, link):
     parser.add_argument("--debug_panel_size", type=int, default=300)
     args, _ = parser.parse_known_args()
 
-    # Validate single-char keys + avoid key conflicts (same as the local viewer)
+    # Validate single-char keys + avoid key conflicts
     keys_used = {
         "buffer_key": args.buffer_key,
         "record_start_key": args.record_start_key,

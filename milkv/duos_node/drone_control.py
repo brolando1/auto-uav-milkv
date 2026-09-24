@@ -4,8 +4,7 @@
 # (pc_node/radio_bridge.py), which executes them on the cflib Commander and
 # sends telemetry back up. The keyboard state also comes in from the PC.
 #
-# Takeoff is armed from the PC with the space key (no blind 10 s countdown, the
-# pilot is remote now).
+# Takeoff is armed from the PC with the space key.
 
 import threading
 import time
@@ -169,7 +168,7 @@ def drone_flight_controller(commander, telemetry, flight_data, key_state, orches
     # commander: RemoteCommander (setpoints go to the PC radio bridge)
     # telemetry: TelemetryState fed by the PC's 'telemetry' messages
 
-    # Motion params (same as the old PC controller)
+    # Motion params
     forward_step = 0.5      # [m/s]
     sideways_step = 0.5     # [m/s]
     angular_step = 57.3     # [deg/s]  57.3 deg/s == 1 rad/s
@@ -200,7 +199,7 @@ def drone_flight_controller(commander, telemetry, flight_data, key_state, orches
             flight_status['state'] = 'killed'
             commander.send_stop_setpoint()
             return
-        # keep the commander alive while waiting (same as the old PC controller)
+        # keep the commander alive while waiting
         commander.send_unlock()
         time.sleep(0.05)
     if stop_event.is_set():
