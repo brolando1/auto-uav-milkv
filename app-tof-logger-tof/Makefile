@@ -1,9 +1,5 @@
 EXTRA_CFLAGS += -Isrc
 
-# ToF frames go out over CPX/wifi instead of CRTP/radio. Comment this out to
-# get the old radio path back.
-EXTRA_CFLAGS += -DTOF_OVER_CPX
-
 EXTRA_LDFLAGS += -specs=nosys.specs -Wl
 
 CRAZYFLIE_BASE := $(HOME)/auto-uav/crazyflie-firmware

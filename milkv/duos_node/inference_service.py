@@ -22,6 +22,7 @@ from common import protocol
 from duos_node.drone_control import GATE_THRESHOLD
 
 DEBUG_INPUTS_HOLD_S = 3.0   # keep relaying model inputs this long after the last request
+TRAINING_IDLE_S = 1.0       # inference loop period while a finetune child has the core
 
 
 class ModelManager:
@@ -88,7 +89,7 @@ class ModelManager:
 
 class InferenceService:
     def __init__(self, *, pairer, model_manager, pred_filter, ema_filter,
-                 orchestrator, pc_link, cpx_link, thr=0.5, cam_preproc="crop",
+                 orchestrator, pc_link, link, thr=0.5, cam_preproc="crop",
                  median_k=11, ema_percent=100.0, flight_data=None, flight_status=None,
                  key_state=None, navigator_every=2, navigator_mode="always"):
         self.pairer = pairer
@@ -97,7 +98,7 @@ class InferenceService:
         self.ema_filter = ema_filter
         self.orchestrator = orchestrator
         self.pc_link = pc_link
-        self.cpx_link = cpx_link
+        self.link = link
         self.flight_data = flight_data      # feeds the local flight controller
         self.flight_status = flight_status  # telemetry from it, relayed in STATE
         self.key_state = key_state          # PC key stream, age shown in STATE
@@ -131,6 +132,7 @@ class InferenceService:
         self._start_time = time.time()
         self._last_time = time.time()
         self._frame_count = 0
+        self._last_state = None     # last STATE sent, re-sent while a finetune runs
 
     def stop(self):
         self._running = False
@@ -158,21 +160,33 @@ class InferenceService:
             return True
         return bool(fs.get('auto')) and p_gate_ema >= GATE_THRESHOLD
 
-    def _yield_to_training(self):
-        # while a finetune child runs, idle this loop to ~1 Hz so the training gets
-        # the core. Not in autonomous flight: there the controller needs the
-        # predictions, its watchdog would land the drone otherwise.
-        if self.orchestrator.train_proc is None:
-            return
-        fs = self.flight_status if self.flight_status is not None else {}
-        if fs.get('state') == 'flying' and bool(fs.get('auto')):
-            return
-        time.sleep(1.0)
+    def _idle_for_training(self):
+        # while a finetune child has the core (see RetrainOrchestrator.
+        # training_has_priority; the camera thread idles too, see main.py) this
+        # thread runs no model: once a second it services the training (the
+        # fork and the hot-swap happen in poll_training) and re-sends the last
+        # STATE with a fresh training status so the viewer keeps showing it.
+        if not self.orchestrator.training_has_priority(self.flight_status):
+            return False
+        time.sleep(TRAINING_IDLE_S)
+        self.orchestrator.poll_training()
+        self.pairer.latest()    # drop what the camera delivered meanwhile
+        if self._last_state is not None:
+            state = dict(self._last_state)
+            state["t_duo_mon"] = time.monotonic()
+            state["uart_ok"] = self.link.connected
+            state["echo_t_pc"] = self.echo_t_pc
+            state["training"] = self.orchestrator.training_status()
+            state["flight"] = self._flight_state()
+            self.pc_link.publish(protocol.FRAME_STATE, protocol.encode_json(state))
+        self._last_time = time.time()
+        return True
 
     def run(self):
         print("[INFER] Inference loop started")
         while self._running:
-            self._yield_to_training()
+            if self._idle_for_training():
+                continue
             pair = self.pairer.latest()
             if pair is None:
                 self.orchestrator.poll_training()
@@ -257,11 +271,12 @@ class InferenceService:
                 "tof_fps_inst": round(tof_meta.get("fps_inst", 0.0), 1),
                 "tof_fps_avg": round(tof_meta.get("fps_avg", 0.0), 1),
                 "tof_seq": tof_meta.get("seq"),
-                "wifi_ok": self.cpx_link.connected,
+                "uart_ok": self.link.connected,
                 "echo_t_pc": self.echo_t_pc,
                 "training": self.orchestrator.training_status(),
                 "flight": self._flight_state(),
             }
+            self._last_state = state
             self.pc_link.publish(protocol.FRAME_STATE, protocol.encode_json(state))
 
         print("[INFER] Inference loop stopped")

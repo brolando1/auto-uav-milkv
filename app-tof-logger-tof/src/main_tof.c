@@ -19,15 +19,13 @@
 #include "task.h"
 
 #include "debug.h"
-#include "crtp.h"
 #include "vl53l5cx_api.h"
 #include "deck.h"
 #include "param.h"
-
-#ifdef TOF_OVER_CPX
-#include "cpx.h"
-#include "cpx_internal_router.h"
-#endif
+#include "log.h"
+#include "uart1.h"
+#include "commander.h"
+#include "supervisor.h"
 
 #define  ARM_CM_DEMCR      (*(uint32_t *)0xE000EDFC)
 #define  ARM_CM_DWT_CTRL   (*(uint32_t *)0xE0001000)
@@ -37,8 +35,6 @@
 
 //-------------------Control Macros-------------------//
 #define SENSOR_FORWARD_ENABLE
-#define SEND_DATA
-#define ON_BOARD_PROCESS
 #define START_FLIGHT
 
 //-------------------Custom libraries-------------------//
@@ -70,14 +66,26 @@ volatile uint8_t irq_status = 0;
 
 uint32_t timestamp;
 
-//-------------------Functions defins-------------------//
-#ifdef TOF_OVER_CPX
-void send_tof_cpx(uint8_t *dist128, uint8_t *status64);
-#else
-void send_command(uint8_t command, uint8_t arg);
-void send_data_packet(uint8_t *data, uint16_t data_len);
-void send_data_packet_28b(uint8_t *data, uint8_t size, uint8_t index);
-#endif
+//-------------------Serial link to the Duo S-------------------//
+// UART1 of the expansion port (TX1/RX1 pins), 115200 8N1. Frame layout, same
+// as in milkv/common/protocol.py:
+//   AA 55 | type | len | payload | xor of type, len and payload
+#define UART_BAUD   115200
+#define UART_TOF    'T'   // out: seq u8, timestamp_ms u32, 128 B distances, 64 B target status
+#define UART_STATE  'S'   // out: z, roll, pitch, yaw (float), tumbled u8
+#define UART_CMD    'C'   // in:  sp_type u8, vx, vy, yawrate, zdistance (float)
+#define SP_HOVER    1
+#define SP_STOP     2
+#define SP_UNLOCK   3
+
+struct __attribute__((packed)) state_payload { float z, roll, pitch, yaw; uint8_t tumbled; };
+struct __attribute__((packed)) cmd_payload { uint8_t sp_type; float vx, vy, yawrate, zdistance; };
+
+static logVarId_t id_z, id_roll, id_pitch, id_yaw, id_tumbled;
+
+static void send_tof(uint8_t *dist128, uint8_t *status64);
+static void send_state(void);
+static void uart_rx_task(void *param);
 //
 bool initialize_sensors_I2C(VL53L5CX_Configuration *p_dev, uint8_t mode);
 bool config_sensors(VL53L5CX_Configuration *p_dev, uint16_t new_i2c_address);
@@ -141,183 +149,108 @@ void appMain()
 
   #ifdef SENSOR_FORWARD_ENABLE
     uint8_t get_data_success_f = false;
-    #if defined(SEND_DATA) && !defined(TOF_OVER_CPX)
-      uint8_t to_send_buffer_f[ToF_DISTANCES_LEN+ToF_TARGETS_STATUS_LEN];
-    #endif
   #endif
 
-  // TODO : delete if second while loop works
-  // while(1) {
-   
-  //   vTaskDelay(M2T(67)); // Task Delay, we want to run this task at 15Hz
-  //   // Collect Data
-  //   #ifdef SENSOR_FORWARD_ENABLE
-  //     get_data_success_f = get_sensor_data(&vl53l5dev_f, &vl53l5_res_f);
-  //     if (get_data_success_f == true)
-  //     {
-  //       //
-  //       send_command(1, (ToF_DISTANCES_LEN+ToF_TARGETS_DETECTED_LEN+ToF_TARGETS_STATUS_LEN)/28 + 1);  
-  //       //
-  //       memcpy(&to_send_buffer_f[0], (uint8_t *)(&vl53l5_res_f.distance_mm[0]), ToF_DISTANCES_LEN);
-  //       memcpy(&to_send_buffer_f[ToF_DISTANCES_LEN], (uint8_t *)(&vl53l5_res_f.nb_target_detected[0]), ToF_TARGETS_DETECTED_LEN);
-  //       memcpy(&to_send_buffer_f[ToF_DISTANCES_LEN+ToF_TARGETS_DETECTED_LEN], (uint8_t *)(&vl53l5_res_f.target_status[0]), ToF_TARGETS_STATUS_LEN);
-  //       //
-  //       send_data_packet(&to_send_buffer_f[0], ToF_DISTANCES_LEN+ToF_TARGETS_DETECTED_LEN+ToF_TARGETS_STATUS_LEN);
-
-
-  //       // Clear Flag
-  //       get_data_success_f = false;
-
-  //     }
-  //   #endif
-  // }
+  uart1Init(UART_BAUD);
+  xTaskCreate(uart_rx_task, "uartRx", 2 * configMINIMAL_STACK_SIZE, NULL, 2, NULL);
+  id_z = logGetVarId("stateEstimate", "z");
+  id_roll = logGetVarId("stateEstimate", "roll");
+  id_pitch = logGetVarId("stateEstimate", "pitch");
+  id_yaw = logGetVarId("stateEstimate", "yaw");
+  id_tumbled = logGetVarId("sys", "isTumbled");
+  DEBUG_PRINT("ToF loop start, UART1 at %d\n", UART_BAUD);
 
   TickType_t xLastWakeTime = xTaskGetTickCount();
-  #ifdef TOF_OVER_CPX
-    uint32_t polls_without_data = 0;
-    bool first_frame_done = false;
-    DEBUG_PRINT("ToF loop start (CPX)\n");
-  #endif
-
   while(1) {
-   
-    //vTaskDelay(M2T(67)); // Task Delay, we want to run this task at 15Hz
-    vTaskDelayUntil(&xLastWakeTime, M2T(67));
-    // Collect Data
+    vTaskDelayUntil(&xLastWakeTime, M2T(67));   // 15 Hz, the ToF rate
+    send_state();
     #ifdef SENSOR_FORWARD_ENABLE
       get_data_success_f = get_sensor_data(&vl53l5dev_f, &vl53l5_res_f);
-      #ifdef TOF_OVER_CPX
-        if (!get_data_success_f) {
-          polls_without_data++;
-          if ((polls_without_data % 450) == 0)   // every ~30 s without a frame
-            DEBUG_PRINT("ToF: no data ready (%lu polls)\n", (unsigned long)polls_without_data);
-        }
-      #endif
       if (get_data_success_f == true)
       {
-        #ifdef TOF_OVER_CPX
-          if (!first_frame_done) DEBUG_PRINT("ToF: first frame ready, sending over CPX\n");
-          // one frame = 3 CPX packets to the wifi host, radio stays free
-          send_tof_cpx((uint8_t *)(&vl53l5_res_f.distance_mm[0]), (uint8_t *)(&vl53l5_res_f.target_status[0]));
-          if (!first_frame_done) { DEBUG_PRINT("ToF: first frame sent\n"); first_frame_done = true; }
-        #else
-          //
-          send_command(1, (ToF_DISTANCES_LEN+ToF_TARGETS_STATUS_LEN)/28 + 1);
-          //
-          memcpy(&to_send_buffer_f[0], (uint8_t *)(&vl53l5_res_f.distance_mm[0]), ToF_DISTANCES_LEN);
-          memcpy(&to_send_buffer_f[ToF_DISTANCES_LEN], (uint8_t *)(&vl53l5_res_f.target_status[0]), ToF_TARGETS_STATUS_LEN);
-          //
-          send_data_packet(&to_send_buffer_f[0], ToF_DISTANCES_LEN+ToF_TARGETS_STATUS_LEN);
-        #endif
-
-        // Clear Flag
+        send_tof((uint8_t *)(&vl53l5_res_f.distance_mm[0]), (uint8_t *)(&vl53l5_res_f.target_status[0]));
         get_data_success_f = false;
-
       }
     #endif
   }
 }
 
-#ifdef TOF_OVER_CPX
-// The UART2 CPX link caps the payload well below 192 bytes, so one 8x8 frame
-// goes out as 3 chunks of 64 data bytes each:
-//   chunk 0: distance_mm bytes [0:64]
-//   chunk 1: distance_mm bytes [64:128]
-//   chunk 2: target_status bytes [0:64]
-// Header per chunk: magic 'T', frame seq, chunk idx, n chunks, timestamp_ms (u32)
-#define TOF_CPX_MAGIC       (0x54)
-#define TOF_CPX_CHUNKS      (3)
-#define TOF_CPX_CHUNK_DATA  (64)
-
-static CPXPacket_t cpx_tof_packet;
-static uint32_t send_timeouts = 0;
-static uint32_t frames_sent = 0;
-
-void send_tof_cpx(uint8_t *dist128, uint8_t *status64)
+static void uart_send_frame(uint8_t type, const uint8_t *payload, uint8_t len)
 {
-  static uint8_t frame_seq = 0;
-  static bool route_ready = false;
+  static uint8_t buf[5 + 255];
+  buf[0] = 0xAA; buf[1] = 0x55; buf[2] = type; buf[3] = len;
+  uint8_t x = type ^ len;
+  for (uint8_t i = 0; i < len; i++) { buf[4 + i] = payload[i]; x ^= payload[i]; }
+  buf[4 + len] = x;
+  // byte by byte, the DMA variant only has a 64 byte buffer and a ToF frame is 202
+  uart1SendData(5 + len, buf);
+}
 
-  if (!route_ready) {
-    cpxInitRoute(CPX_T_STM32, CPX_T_WIFI_HOST, CPX_F_APP, &cpx_tof_packet.route);
-    // the STM32 cpxInitRoute leaves lastPacket at 0 (the GAP8 lib sets it);
-    // every chunk is a self-contained CPX packet, so mark it as such
-    cpx_tof_packet.route.lastPacket = true;
-    route_ready = true;
-  }
-
+static void send_tof(uint8_t *dist128, uint8_t *status64)
+{
+  static uint8_t payload[5 + 128 + 64];
+  static uint8_t seq = 0;
   uint32_t timestamp_ms = T2M(xTaskGetTickCount());
+  payload[0] = seq++;
+  memcpy(&payload[1], &timestamp_ms, 4);
+  memcpy(&payload[5], dist128, 128);
+  memcpy(&payload[133], status64, 64);
+  uart_send_frame(UART_TOF, payload, sizeof(payload));
+}
 
-  for (uint8_t idx = 0; idx < TOF_CPX_CHUNKS; idx++) {
-    cpx_tof_packet.data[0] = TOF_CPX_MAGIC;
-    cpx_tof_packet.data[1] = frame_seq;
-    cpx_tof_packet.data[2] = idx;
-    cpx_tof_packet.data[3] = TOF_CPX_CHUNKS;
-    memcpy(&cpx_tof_packet.data[4], (uint8_t *)(&timestamp_ms), 4);
-    if (idx < 2)
-      memcpy(&cpx_tof_packet.data[8], &dist128[idx * TOF_CPX_CHUNK_DATA], TOF_CPX_CHUNK_DATA);
-    else
-      memcpy(&cpx_tof_packet.data[8], &status64[0], TOF_CPX_CHUNK_DATA);
-    cpx_tof_packet.dataLength = 8 + TOF_CPX_CHUNK_DATA;
-    // bounded wait: if the UART2 link to the ESP32 stalls we drop the frame
-    // instead of blocking the app task forever
-    if (!cpxSendPacketBlockingTimeout(&cpx_tof_packet, M2T(200))) {
-      send_timeouts++;
-      if (send_timeouts == 1 || (send_timeouts % 150) == 0)
-        DEBUG_PRINT("ToF CPX: send timeout #%lu (frame %u chunk %u) - UART2 link to the ESP32 stalled?\n", (unsigned long)send_timeouts, (unsigned)frame_seq, (unsigned)idx);
-      break;
+static void send_state(void)
+{
+  struct state_payload s = {
+    logGetFloat(id_z), logGetFloat(id_roll), logGetFloat(id_pitch), logGetFloat(id_yaw),
+    (uint8_t)logGetUint(id_tumbled),
+  };
+  uart_send_frame(UART_STATE, (uint8_t *)&s, sizeof(s));
+}
+
+static void handle_cmd(const struct cmd_payload *c)
+{
+  static setpoint_t sp;
+  memset(&sp, 0, sizeof(sp));
+  if (c->sp_type == SP_HOVER) {
+    // same fields the hover packet of the CRTP generic commander sets
+    sp.mode.z = modeAbs;
+    sp.position.z = c->zdistance;
+    sp.mode.yaw = modeVelocity;
+    sp.attitudeRate.yaw = c->yawrate;
+    sp.mode.x = modeVelocity;
+    sp.mode.y = modeVelocity;
+    sp.velocity.x = c->vx;
+    sp.velocity.y = c->vy;
+    sp.velocity_body = true;
+  } else if (c->sp_type == SP_UNLOCK) {
+    supervisorRequestArming(true);
+  }
+  // stop and unlock hand over the all-zero setpoint: motors off, commander watchdog fed
+  commanderSetSetpoint(&sp, COMMANDER_PRIORITY_CRTP);
+}
+
+// reads the command frames from the Duo S byte by byte
+static void uart_rx_task(void *param)
+{
+  static uint8_t payload[255];
+  uint8_t byte, type = 0, len = 0, pos = 0, x = 0;
+  int state = 0;   // 0/1: sync bytes, 2: type, 3: len, 4: payload, 5: checksum
+  while (1) {
+    if (!uart1GetDataWithTimeout(&byte, M2T(100))) continue;
+    switch (state) {
+      case 0: state = (byte == 0xAA) ? 1 : 0; break;
+      case 1: state = (byte == 0x55) ? 2 : (byte == 0xAA) ? 1 : 0; break;
+      case 2: type = byte; x = byte; state = 3; break;
+      case 3: len = byte; x ^= byte; pos = 0; state = len ? 4 : 5; break;
+      case 4: payload[pos++] = byte; x ^= byte; if (pos == len) state = 5; break;
+      case 5:
+        if (byte == x && type == UART_CMD && len == sizeof(struct cmd_payload))
+          handle_cmd((const struct cmd_payload *)payload);
+        state = 0;
+        break;
     }
   }
-  frame_seq++;
-  frames_sent++;
-  if ((frames_sent % 300) == 0) {   // ~20 s at 15 Hz
-    DEBUG_PRINT("ToF CPX: %lu frames sent, %lu send timeouts\n", (unsigned long)frames_sent, (unsigned long)send_timeouts);
-  }
 }
-#endif
-
-#ifndef TOF_OVER_CPX
-void send_data_packet(uint8_t *data, uint16_t data_len)
-{
-  uint8_t packets_nr = 0;
-  if (data_len%28 > 0)
-    packets_nr = data_len/28 + 1;
-  else
-    packets_nr = data_len/28;
-
-  for (uint8_t idx=0; idx<packets_nr; idx++)
-    if(data_len - 28*idx >= 28)
-      send_data_packet_28b(&data[28*idx], 28, idx);
-    else
-      send_data_packet_28b(&data[28*idx], data_len - 28*idx, idx);
-}
-
-void send_data_packet_28b(uint8_t *data, uint8_t size, uint8_t index)
-{
-  CRTPPacket pk;
-  pk.header = CRTP_HEADER(1, 0); // first arg is the port number
-  pk.size = size + 2;
-  pk.data[0] = 'D';
-  pk.data[1] = index;
-  memcpy(&(pk.data[2]), data, size);
-  crtpSendPacketBlock(&pk);
-}
-
-
-void send_command(uint8_t command, uint8_t arg)
-{
-  //uint32_t timestamp = get_time_stamp();
-  CRTPPacket pk;
-  pk.header = CRTP_HEADER(1, 0); // first arg is the port number
-  pk.size = 7;
-  pk.data[0] = 'C';
-  pk.data[1] = command;
-  pk.data[2] = arg;
-  memcpy(&pk.data[3], (uint8_t *)(&timestamp), 4);
-  //DEBUG_PRINT("cmd PK 1:%d, 2:%d, 3:%d, 4:%d, ",pk.data[3],pk.data[4],pk.data[5],pk.data[6]); //todo delete
-  crtpSendPacketBlock(&pk);
-}
-#endif /* !TOF_OVER_CPX */
 
 bool config_sensors(VL53L5CX_Configuration *p_dev, uint16_t new_i2c_address)
 {

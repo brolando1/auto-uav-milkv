@@ -1,1 +1,1 @@
-cmd_/home/broland/Desktop/milkv-drone/app-tof-logger-tof/built-in.o :=  arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16  -r -o /home/broland/Desktop/milkv-drone/app-tof-logger-tof/built-in.o /home/broland/Desktop/milkv-drone/app-tof-logger-tof/src/built-in.o
+cmd_/Users/broland/auto-uav-milkv/app-tof-logger-tof/built-in.o :=  arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16   -r -o /Users/broland/auto-uav-milkv/app-tof-logger-tof/built-in.o /Users/broland/auto-uav-milkv/app-tof-logger-tof/src/built-in.o

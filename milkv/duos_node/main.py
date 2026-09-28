@@ -1,5 +1,5 @@
 # Entry point for the Milk-V Duo S node:
-#   AI-deck wifi socket (camera + ToF) -> pairing -> inference -> PC link
+#   camera + UART link to the drone (ToF, state, setpoints) -> pairing -> inference -> PC link
 # plus the crash-dump / finetune / hot-swap machinery.
 #
 # Run from milkv/ :
@@ -19,8 +19,7 @@ import argparse    # noqa: E402
 import time        # noqa: E402
 import threading   # noqa: E402
 
-import cv2         # noqa: E402  (headless build is fine, only imdecode is used)
-import numpy as np  # noqa: F401,E402
+import cv2         # noqa: E402  (headless build is fine, only imencode is used)
 
 from training_quantization.continual_learning.runtime_utils import (  # noqa: E402
     preload_training_modules,
@@ -29,11 +28,20 @@ from training_quantization.continual_learning.runtime_utils import (  # noqa: E4
     EMAProbabilityFilter,
 )
 from common import protocol                     # noqa: E402
-from duos_node.cpx_link import CPXLink             # noqa: E402
+from duos_node.camera import Camera                 # noqa: E402
+from duos_node.uart_link import UARTLink            # noqa: E402
 from duos_node.pairing import Pairer               # noqa: E402
 from duos_node.pc_link import PCLink               # noqa: E402
 from duos_node.inference_service import ModelManager, InferenceService  # noqa: E402
 from duos_node.retrain_orchestrator import RetrainOrchestrator          # noqa: E402
+
+# camera frames kept while a finetune child has the core: 1 in 30 (~1 fps), enough
+# for the ~1 Hz inference loop and the viewer; the rest are dropped before the
+# copy/resize/jpeg so the single core goes to the training
+TRAINING_CAM_EVERY = 30
+# the viewer gets a jpeg of every n-th frame (30 fps -> 10 fps); the jpeg encode
+# is the camera thread's main cost, the inference still sees every frame
+VIEWER_JPEG_EVERY = 3
 
 
 def parse_args():
@@ -41,22 +49,20 @@ def parse_args():
     cl_dir = tq_dir / "continual_learning"
 
     parser = argparse.ArgumentParser(description="Milk-V Duo S flight/inference/retraining node")
-    parser.add_argument("-n", "--deck_ip", default="192.168.4.1", help="AI-deck IP")
-    parser.add_argument("-p", "--deck_port", type=int, default=5000, help="AI-deck port")
     parser.add_argument("--listen_host", default="0.0.0.0", help="Bind address for the PC link")
     parser.add_argument("--listen_port", type=int, default=5800, help="Port for the PC link")
 
     parser.add_argument("--fly", action="store_true",
-                        help="Run the flight controller (setpoints go to the PC radio bridge)")
+                        help="Run the flight controller (setpoints go to the drone over the UART)")
 
     parser.add_argument("--ckpt", type=str, required=True, help="Path to GateClassifier checkpoint (.pt)")
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--cam_preproc", type=str, default="crop", choices=["crop", "resize"])
     parser.add_argument("--thr", type=float, default=0.5)
     parser.add_argument("--median_k", type=int, default=11)
-    parser.add_argument("--navigator_mode", choices=["always", "gated"], default="always",
-                        help="always: run the navigator on every frame (constant frame rate), its yaw is handed to "
-                             "the controller only in auto mode with a gate; gated: compute it only then")
+    parser.add_argument("--navigator_mode", choices=["always", "gated"], default="gated",
+                        help="gated (default): run the navigator only when its yaw is used, i.e. in auto mode with "
+                             "a gate in view (and in sensing-only runs without a drone); always: on every frame")
     parser.add_argument("--navigator_every", type=int, default=2,
                         help="run the gate navigator on every n-th frame it is needed on (1 = every frame); "
                              "the frames in between reuse the last yaw rate")
@@ -139,18 +145,16 @@ def main():
     stop_event = threading.Event()
     service = None  # set below, needed inside on_command
 
-    from duos_node.drone_control import KeyState, FlightData, TelemetryState, RemoteCommander
+    from duos_node.drone_control import KeyState, FlightData, TelemetryState
     key_state = KeyState()
     flight_data = FlightData()
     telemetry = TelemetryState()
-    flight_status = {'state': 'no_drone' if not args.fly else 'waiting_radio', 'auto': False}
+    flight_status = {'state': 'no_drone' if not args.fly else 'waiting_drone', 'auto': False}
 
     def on_command(cmd):
         name = cmd.get("cmd")
         if name == "keys":
             key_state.update(cmd.get("pressed", []))
-        elif name == "telemetry":
-            telemetry.update(cmd)
         elif name in ("crash", "dump"):
             print(f"[CMD] {name} received")
             orchestrator.trigger_dump(source=name)
@@ -172,12 +176,14 @@ def main():
 
     pc_link = PCLink(host=args.listen_host, port=args.listen_port, on_command=on_command)
 
-    def on_jpeg(jpeg_bytes, seq):
-        # relay to the PC first so the viewer doesn't depend on inference speed
-        pc_link.publish(protocol.FRAME_JPEG, protocol.encode_jpeg(seq, time.monotonic(), jpeg_bytes))
-        nparr = np.frombuffer(jpeg_bytes, np.uint8)
-        decoded = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
-        pairer.on_camera(decoded, jpeg_bytes, seq)
+    def on_frame(gray, seq):
+        # the pairer gets every frame itself, the viewer a jpeg of every n-th
+        jpeg_bytes = None
+        if seq % VIEWER_JPEG_EVERY == 0:
+            _, jpg = cv2.imencode('.jpg', gray, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            jpeg_bytes = jpg.tobytes()
+            pc_link.publish(protocol.FRAME_JPEG, protocol.encode_jpeg(seq, time.monotonic(), jpeg_bytes))
+        pairer.on_camera(gray, jpeg_bytes, seq)
 
     def on_tof(package):
         dist_bytes, status_bytes = package['raw']
@@ -188,7 +194,11 @@ def main():
         pairer.set_tof(package)
         flight_data.set_tof(package)
 
-    cpx = CPXLink(deck_ip=args.deck_ip, deck_port=args.deck_port, on_jpeg=on_jpeg, on_tof=on_tof)
+    def frame_wanted(seq):
+        return seq % TRAINING_CAM_EVERY == 0 or not orchestrator.training_has_priority(flight_status)
+
+    camera = Camera(on_frame, frame_wanted=frame_wanted)
+    link = UARTLink(on_tof=on_tof, on_state=telemetry.update)
 
     service = InferenceService(
         pairer=pairer,
@@ -197,7 +207,7 @@ def main():
         ema_filter=ema_filter,
         orchestrator=orchestrator,
         pc_link=pc_link,
-        cpx_link=cpx,
+        link=link,
         thr=args.thr,
         cam_preproc=args.cam_preproc,
         median_k=args.median_k,
@@ -210,7 +220,8 @@ def main():
     )
 
     pc_link.start()
-    cpx.start()
+    link.start()
+    camera.start()
 
     infer_thread = threading.Thread(name="InferenceThread", target=service.run, daemon=True)
     infer_thread.start()
@@ -221,15 +232,13 @@ def main():
 
     try:
         if args.fly:
-            # Flight decisions run here; the setpoints go out to the PC radio
-            # bridge, which owns the Crazyradio and the cflib connection
+            # flight decisions run here, the setpoints go to the drone over the UART link
             from duos_node.drone_control import drone_flight_controller
 
-            commander = RemoteCommander(pc_link)
             control_thread = threading.Thread(
                 name="FlightControl",
                 target=drone_flight_controller,
-                args=(commander, telemetry, flight_data, key_state, orchestrator, flight_status, stop_event),
+                args=(link, telemetry, flight_data, key_state, orchestrator, flight_status, stop_event),
                 daemon=True,
             )
             control_thread.start()
@@ -243,7 +252,8 @@ def main():
         print("[INFO] Shutting down...")
         stop_event.set()
         service.stop()
-        cpx.stop()
+        camera.stop()
+        link.stop()
         pc_link.stop()
         orchestrator.shutdown()
         infer_thread.join(timeout=2.0)

@@ -331,7 +331,7 @@ def remote_viewer(shared_state, link):
                 f"ToF: {seq_str}, {age_str}  (paired as: camera_frame + latest_ToF)",
                 f"Model: {remote['model_name']} (gen {remote['model_gen']})",
                 f"Link: {'OK' if remote['link_ok'] else 'DOWN'}  state_age={state_age * 1000.0:.0f}ms  rtt={rtt_str}  "
-                f"wifi(deck<->duo)={'OK' if remote['wifi_ok'] else 'DOWN'}",
+                f"uart(drone<->duo)={'OK' if remote['uart_ok'] else 'DOWN'}",
                 flight_line,
                 rec_line,
                 training_state_line,

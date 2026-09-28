@@ -1,8 +1,6 @@
-# Flight control loop on the Milk-V. The Crazyradio dongle stays on the PC:
-# this loop makes all the decisions (auto/manual mixing, obstacle avoidance,
-# failsafes) and streams SETPOINT instructions to the PC radio bridge
-# (pc_node/radio_bridge.py), which executes them on the cflib Commander and
-# sends telemetry back up. The keyboard state also comes in from the PC.
+# Flight control loop on the Milk-V: auto/manual mixing, obstacle avoidance,
+# failsafes. The setpoints go to the Crazyflie over the UART link, which also
+# brings the drone state back. The keyboard state comes in from the PC.
 #
 # Takeoff is armed from the PC with the space key.
 
@@ -10,8 +8,6 @@ import threading
 import time
 
 import numpy as np
-
-from common import protocol
 
 # p(gate) above which auto mode follows the navigator's yaw instead of the ToF
 # obstacle avoidance (the inference loop only runs the navigator above it)
@@ -30,30 +26,8 @@ KEYS_HOVER_S = 1.0
 KEYS_ABORT_S = 3.0
 
 
-class RemoteCommander:
-    # same call surface as the cflib Commander, but every call becomes a
-    # SETPOINT frame that the PC radio bridge executes on the real Commander
-    def __init__(self, pc_link):
-        self._pc_link = pc_link
-
-    def _send(self, sp_type, vx=0.0, vy=0.0, yawrate=0.0, zdistance=0.0):
-        self._pc_link.publish(
-            protocol.FRAME_SETPOINT,
-            protocol.encode_setpoint(sp_type, vx, vy, yawrate, zdistance, time.monotonic()),
-        )
-
-    def send_hover_setpoint(self, vx=0.0, vy=0.0, yawrate=0.0, zdistance=0.0):
-        self._send(protocol.SP_HOVER, vx, vy, yawrate, zdistance)
-
-    def send_stop_setpoint(self):
-        self._send(protocol.SP_STOP)
-
-    def send_unlock(self):
-        self._send(protocol.SP_UNLOCK)
-
-
 class TelemetryState:
-    # latest drone telemetry received from the PC radio bridge (50ms log block)
+    # latest drone state received over the UART link
     def __init__(self):
         self._lock = threading.Lock()
         self._data = {'z': 0.0, 'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0, 'tumbled': 0}
@@ -165,8 +139,8 @@ def smooth_velocity(previous_command, target_command, alpha_filter, alpha_acc=0.
 
 
 def drone_flight_controller(commander, telemetry, flight_data, key_state, orchestrator, flight_status, stop_event):
-    # commander: RemoteCommander (setpoints go to the PC radio bridge)
-    # telemetry: TelemetryState fed by the PC's 'telemetry' messages
+    # commander: the UART link (send_hover_setpoint / send_stop_setpoint / send_unlock)
+    # telemetry: TelemetryState fed by the drone's state frames on the same link
 
     # Motion params
     forward_step = 0.5      # [m/s]
@@ -178,9 +152,9 @@ def drone_flight_controller(commander, telemetry, flight_data, key_state, orches
     gate_threshold = GATE_THRESHOLD
     forward_vel_multiplier = 1.75
 
-    # Wait until the PC radio bridge is up (telemetry flowing = drone connected)
-    print("[CF CONTROL] Waiting for the PC radio bridge / drone telemetry...")
-    flight_status['state'] = 'waiting_radio'
+    # Wait until the drone's state frames arrive (drone on, wire connected)
+    print("[CF CONTROL] Waiting for the drone state on the UART...")
+    flight_status['state'] = 'waiting_drone'
     while not stop_event.is_set() and telemetry.age_s() > 1.0:
         time.sleep(0.1)
     if stop_event.is_set():
@@ -189,7 +163,7 @@ def drone_flight_controller(commander, telemetry, flight_data, key_state, orches
     commander.send_unlock()
 
     # Wait for the PC to arm takeoff with space
-    print("[CF CONTROL] Radio bridge up. Waiting for SPACE from the PC to take off...")
+    print("[CF CONTROL] Drone state arriving. Waiting for SPACE from the PC to take off...")
     flight_status['state'] = 'armed'
     while not stop_event.is_set():
         if key_state.is_pressed('space') and key_state.age_s() < 0.5:

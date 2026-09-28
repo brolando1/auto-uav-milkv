@@ -1,14 +1,13 @@
-# Wire protocol shared between the Duo S node and the PC ground station,
-# plus the CPX framing constants for the AI-deck socket (192.168.4.1:5000).
+# Wire protocol shared between the Duo S node and the PC ground station, plus
+# the framing of the serial link between the Duo S and the Crazyflie.
 #
 # Duo S <-> PC framing (TCP, little-endian):
 #   header: <IB  = payload_length (u32), frame_type (u8)
 #   payload depends on frame_type, see below.
 #
-# CPX wire framing on the AI-deck socket (see lib/cpx/src/cpx.c):
-#   <H  wireLength (= payload + 2 route bytes)
-#   B   route0 = dst:3 | src:3 | lastPacket:1 | reserved:1
-#   B   route1 = function:6 | version:2
+# Duo S <-> Crazyflie framing (UART1 of the expansion port, 115200 8N1):
+#   AA 55 | type (u8) | len (u8) | payload | xor of type, len and payload
+# The STM32 side of this lives in app-tof-logger-tof/src/main_tof.c.
 
 import json
 import struct
@@ -19,37 +18,28 @@ import numpy as np
 FRAME_STATE = 0x01     # JSON: predictions + fps + training status (per inference)
 FRAME_JPEG = 0x02      # <Id (seq, t_duo_mon) + raw jpeg bytes
 FRAME_TOF = 0x03       # <Id (seq, t_duo_mon) + 128B u16 distances + 64B status
-FRAME_SETPOINT = 0x04  # <Bffffd: sp_type, vx, vy, yawrate, zdistance, t_duo_mon
-                       # (Duo S flight controller -> PC radio bridge)
 FRAME_DEBUG = 0x05     # <Id (seq, t_duo_mon) + <I jpeg_len + jpeg of the camera model input (168x168 u8)
                        # + 21x21 float32 ToF model input (Duo S -> PC, only while the viewer asks for it)
-FRAME_CMD = 0x10       # JSON: {"cmd": ..., ...}  (PC -> Duo S: keys, telemetry, dump, ping, ...)
+FRAME_CMD = 0x10       # JSON: {"cmd": ..., ...}  (PC -> Duo S: keys, dump, ping, ...)
 
-# setpoint types executed by the PC radio bridge
-SP_HOVER = 1    # commander.send_hover_setpoint(vx, vy, yawrate, zdistance)
-SP_STOP = 2     # commander.send_stop_setpoint()
-SP_UNLOCK = 3   # commander.send_setpoint(0, 0, 0, 0)
+# setpoint types, sent to the drone in the UART command frames
+SP_HOVER = 1    # hover setpoint (vx, vy, yawrate, zdistance)
+SP_STOP = 2     # motors off
+SP_UNLOCK = 3   # arm and keep the commander alive with a zero setpoint
 
 LINK_HEADER = struct.Struct('<IB')
 SEQ_T_HEADER = struct.Struct('<Id')
-SETPOINT_STRUCT = struct.Struct('<Bffffd')
 
-# ---------------- CPX constants ----------------
-CPX_SRC_STM32 = 1
-CPX_SRC_GAP8 = 4
-CPX_F_APP = 5
+# ---------------- Duo S <-> Crazyflie serial frames ----------------
+UART_SYNC = b'\xaa\x55'
+UART_TOF = 0x54     # 'T' STM32 -> Duo S: <BI seq, timestamp_ms + 128B u16 distances + 64B status
+UART_STATE = 0x53   # 'S' STM32 -> Duo S: <ffffB z, roll, pitch, yaw, tumbled
+UART_CMD = 0x43     # 'C' Duo S -> STM32: <Bffff sp_type (SP_*), vx, vy, yawrate, zdistance
 
-# ToF app packet from the STM32 (main_tof.c, TOF_OVER_CPX). The UART2 CPX link
-# caps the payload at ~100B so one 8x8 frame is split into 3 chunks:
-#   [0] magic 0x54 ('T'), [1] frame seq, [2] chunk idx (0..2), [3] n chunks (3),
-#   [4:8] timestamp_ms u32, [8:72] 64 bytes of data
-#   chunk 0: distance_mm[0:32]  (bytes 0:64)
-#   chunk 1: distance_mm[32:64] (bytes 64:128)
-#   chunk 2: target_status[0:64]
-TOF_MAGIC = 0x54
-TOF_CHUNKS = 3
-TOF_CHUNK_DATA = 64
-TOF_CHUNK_LEN = 8 + TOF_CHUNK_DATA
+UART_TOF_HEADER = struct.Struct('<BI')
+UART_TOF_LEN = UART_TOF_HEADER.size + 128 + 64
+UART_STATE_STRUCT = struct.Struct('<ffffB')
+UART_CMD_STRUCT = struct.Struct('<Bffff')
 
 
 def rx_bytes(sock, size):
@@ -80,18 +70,6 @@ def encode_json(obj):
 
 def decode_json(payload):
     return json.loads(payload.decode('utf-8'))
-
-
-def encode_setpoint(sp_type, vx=0.0, vy=0.0, yawrate=0.0, zdistance=0.0, t_mon=None):
-    if t_mon is None:
-        import time
-        t_mon = time.monotonic()
-    return SETPOINT_STRUCT.pack(sp_type, float(vx), float(vy), float(yawrate), float(zdistance), float(t_mon))
-
-
-def decode_setpoint(payload):
-    # returns (sp_type, vx, vy, yawrate, zdistance, t_duo_mon)
-    return SETPOINT_STRUCT.unpack(payload)
 
 
 def encode_jpeg(seq, t_mon, jpeg_bytes):
@@ -146,53 +124,60 @@ def tof_arrays_from_raw(dist_bytes, status_bytes):
     return matrix, validity
 
 
-# ---------------- CPX side (AI-deck socket) ----------------
-def parse_cpx_route(route0, route1):
-    src = (route0 >> 3) & 0x07
-    dst = route0 & 0x07
-    function = route1 & 0x3F
-    return src, dst, function
+# ---------------- serial link helpers ----------------
+def uart_checksum(data):
+    x = 0
+    for b in data:
+        x ^= b
+    return x
 
 
-def parse_tof_chunk(payload):
-    # Returns (seq, chunk_idx, n_chunks, timestamp_ms, data64) or None if not ours
-    if len(payload) != TOF_CHUNK_LEN or payload[0] != TOF_MAGIC:
-        return None
-    seq = payload[1]
-    chunk_idx = payload[2]
-    n_chunks = payload[3]
-    (timestamp_ms,) = struct.unpack_from('<I', payload, 4)
-    return seq, chunk_idx, n_chunks, timestamp_ms, payload[8:]
+def uart_encode(frame_type, payload):
+    body = bytes([frame_type, len(payload)]) + bytes(payload)
+    return UART_SYNC + body + bytes([uart_checksum(body)])
 
 
-class TofFrameAssembler:
-    """Reassembles the 3 CPX chunks of one ToF frame (keyed by the frame seq)."""
+def uart_encode_cmd(sp_type, vx=0.0, vy=0.0, yawrate=0.0, zdistance=0.0):
+    return uart_encode(UART_CMD, UART_CMD_STRUCT.pack(sp_type, vx, vy, yawrate, zdistance))
 
+
+def uart_decode_tof(payload):
+    # returns (seq, timestamp_ms, dist_bytes, status_bytes)
+    seq, timestamp_ms = UART_TOF_HEADER.unpack_from(payload, 0)
+    off = UART_TOF_HEADER.size
+    return seq, timestamp_ms, payload[off:off + 128], payload[off + 128:off + 192]
+
+
+def uart_decode_state(payload):
+    z, roll, pitch, yaw, tumbled = UART_STATE_STRUCT.unpack(payload)
+    return {'z': z, 'roll': roll, 'pitch': pitch, 'yaw': yaw, 'tumbled': tumbled}
+
+
+class UartParser:
+    # feed it whatever came in from the port and get the complete frames back;
+    # bytes before a sync marker and frames with a bad checksum are dropped
     def __init__(self):
-        self._seq = None
-        self._chunks = {}
-        self._timestamp_ms = 0
+        self._buf = bytearray()
 
-    def add_chunk(self, payload):
-        # Returns (seq, timestamp_ms, dist_bytes, status_bytes) when a frame
-        # completes, else None.
-        parsed = parse_tof_chunk(payload)
-        if parsed is None:
-            return None
-        seq, chunk_idx, n_chunks, timestamp_ms, data = parsed
-        if n_chunks != TOF_CHUNKS or chunk_idx >= TOF_CHUNKS:
-            return None
-
-        if seq != self._seq:
-            self._seq = seq
-            self._chunks = {}
-        self._chunks[chunk_idx] = data
-        self._timestamp_ms = timestamp_ms
-
-        if len(self._chunks) == TOF_CHUNKS:
-            dist_bytes = self._chunks[0] + self._chunks[1]
-            status_bytes = self._chunks[2]
-            self._chunks = {}
-            self._seq = None
-            return seq, self._timestamp_ms, dist_bytes, status_bytes
-        return None
+    def feed(self, data):
+        self._buf.extend(data)
+        frames = []
+        while True:
+            start = self._buf.find(UART_SYNC)
+            if start < 0:
+                del self._buf[:-1]    # keep the last byte, it may be half a marker
+                break
+            del self._buf[:start]
+            if len(self._buf) < 4:
+                break
+            length = self._buf[3]
+            end = 4 + length + 1
+            if len(self._buf) < end:
+                break
+            body = bytes(self._buf[2:4 + length])
+            if uart_checksum(body) == self._buf[4 + length]:
+                frames.append((body[0], body[2:]))
+                del self._buf[:end]
+            else:
+                del self._buf[:2]
+        return frames

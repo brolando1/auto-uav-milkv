@@ -3,9 +3,7 @@
 #   python3 -m duos_node.tests.test_protocol
 
 import socket
-import struct
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -46,28 +44,24 @@ def test_tof_roundtrip():
     assert validity.flat[10]
 
 
-def test_tof_assembler():
-    dist = (np.arange(64, dtype='<u2') * 31).tobytes()
-    status = np.full(64, 9, dtype=np.uint8).tobytes()
-    asm = protocol.TofFrameAssembler()
-    ts = 42
+def test_uart_frames():
+    tof = protocol.uart_encode(protocol.UART_TOF, protocol.UART_TOF_HEADER.pack(7, 1234) + bytes(192))
+    cmd = protocol.uart_encode_cmd(protocol.SP_HOVER, 0.1, -0.2, 3.0, 0.4)
+    bad = b"\xaa\x55\x43\x03abc\x00"   # right shape, wrong checksum
 
-    def chunk(seq, idx, data):
-        return bytes([protocol.TOF_MAGIC, seq, idx, 3]) + struct.pack('<I', ts) + data
+    # garbage in front, a frame split over two reads, a corrupted frame in between
+    parser = protocol.UartParser()
+    assert parser.feed(b"xx" + tof[:50]) == []
+    frames = parser.feed(tof[50:] + bad + cmd)
+    assert [f[0] for f in frames] == [protocol.UART_TOF, protocol.UART_CMD]
 
-    assert asm.add_chunk(chunk(1, 0, dist[0:64])) is None
-    assert asm.add_chunk(chunk(1, 1, dist[64:128])) is None
-    out = asm.add_chunk(chunk(1, 2, status))
-    assert out is not None
-    seq, timestamp_ms, dist_out, status_out = out
-    assert seq == 1 and timestamp_ms == 42
-    assert dist_out == dist and status_out == status
+    seq, timestamp_ms, dist, status = protocol.uart_decode_tof(frames[0][1])
+    assert (seq, timestamp_ms, len(dist), len(status)) == (7, 1234, 128, 64)
+    sp_type, vx, vy, yawrate, zdistance = protocol.UART_CMD_STRUCT.unpack(frames[1][1])
+    assert sp_type == protocol.SP_HOVER and abs(vx - 0.1) < 1e-6 and abs(zdistance - 0.4) < 1e-6
 
-    # a chunk from a new frame drops the incomplete old one
-    assert asm.add_chunk(chunk(2, 0, dist[0:64])) is None
-    assert asm.add_chunk(chunk(3, 0, dist[0:64])) is None
-    assert asm.add_chunk(chunk(3, 1, dist[64:128])) is None
-    assert asm.add_chunk(chunk(3, 2, status)) is not None
+    state = protocol.uart_decode_state(protocol.UART_STATE_STRUCT.pack(0.4, 1.0, -2.0, 90.0, 1))
+    assert abs(state['z'] - 0.4) < 1e-6 and state['tumbled'] == 1
 
 
 def test_debug_roundtrip():
@@ -86,14 +80,6 @@ def test_pc_protocol_copy_in_sync():
     if pc_copy.exists():
         assert pc_copy.read_text() == (APP_ROOT / "common" / "protocol.py").read_text(), \
             "pc/pc_node/protocol.py differs from milkv/common/protocol.py - copy it over"
-
-
-def test_cpx_route():
-    # dst=3 (wifi host), src=1 (stm32), function=5 (app)
-    route0 = 3 | (1 << 3)
-    route1 = 5
-    src, dst, function = protocol.parse_cpx_route(route0, route1)
-    assert (src, dst, function) == (1, 3, 5)
 
 
 def test_pc_link_loopback():

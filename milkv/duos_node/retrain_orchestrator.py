@@ -93,6 +93,16 @@ class RetrainOrchestrator:
         self.status_msg = ""
         self.status_until = 0.0
 
+    def training_has_priority(self, flight_status=None):
+        """True while a finetune child runs and the drone is not in autonomous
+        flight: the node's other threads (camera, inference) idle then so the
+        child gets the single core. In autonomous flight the controller needs
+        the predictions (its watchdog would land the drone otherwise)."""
+        if self.train_proc is None:
+            return False
+        fs = flight_status if flight_status is not None else {}
+        return not (fs.get('state') == 'flying' and bool(fs.get('auto')))
+
     def _set_status(self, msg, seconds=3.0):
         print(f"[ORCH] {msg}")
         self.status_msg = msg

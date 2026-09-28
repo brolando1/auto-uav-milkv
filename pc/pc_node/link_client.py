@@ -14,11 +14,10 @@ from pc_node import protocol
 
 
 class DuoLink:
-    def __init__(self, duos_ip, duos_port=5800, shared_state=None, on_setpoint=None):
+    def __init__(self, duos_ip, duos_port=5800, shared_state=None):
         self.duos_ip = duos_ip
         self.duos_port = duos_port
         self.shared_state = shared_state
-        self.on_setpoint = on_setpoint  # radio bridge callback (payload bytes)
 
         self._sock = None
         self._send_lock = threading.Lock()
@@ -39,7 +38,7 @@ class DuoLink:
             'cam_fps_avg': 0.0,
             'tof_fps_inst': 0.0,
             'tof_fps_avg': 0.0,
-            'wifi_ok': False,
+            'uart_ok': False,
             'training': {'state': 'idle'},
             'echo_t_pc': None,
             't_state_mon': 0.0,   # monotonic time of last STATE frame
@@ -124,12 +123,7 @@ class DuoLink:
             with self._lock:
                 self.remote['t_rx_mon'] = now_mon
 
-            if frame_type == protocol.FRAME_SETPOINT:
-                # flight critical: hand straight to the radio bridge
-                if self.on_setpoint is not None:
-                    self.on_setpoint(payload)
-
-            elif frame_type == protocol.FRAME_STATE:
+            if frame_type == protocol.FRAME_STATE:
                 state = protocol.decode_json(payload)
                 with self._lock:
                     self.remote.update(state)
