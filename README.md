@@ -139,21 +139,24 @@ python3 -m duos_node.clear_collision --yes
 
 ## Testing without the drone
 
-From `milkv/`:
+The fake AI-deck server plays the drone: it serves the CPX socket on localhost with a moving blob as camera and a moving wall as ToF, so the node runs its whole pipeline, dumps and finetunes included.
+
+Duo S, two sessions, both from `~/milkv`:
 
 ```
-python3 -m duos_node.simple_node --ckpt training_quantization/model/gate_classifier_model.pt [--frames <dataset dir>] [--finetune_on_dump]
+python3 -m duos_node.tests.fake_cpx_server
+python3 -u -m duos_node.main -n 127.0.0.1 --ckpt training_quantization/throwaway_models/gate_classifier_model.pt --finetune_on_dump --buffer_n 90 --median_k 7
 ```
 
-The node's learning loop in one file, no drone, AI-deck or PC link. `d` + Enter simulates a crash, `--dump_at <n>` does it at frame n. Good starting point to read the code.
-
-Full pipeline on one machine:
+PC, from `pc/`:
 
 ```
-python3 -m duos_node.tests.fake_cpx_server                    # fakes the AI-deck on localhost:5000
-python3 -m duos_node.main -n 127.0.0.1 --ckpt training_quantization/model/gate_classifier_model.pt
-cd ../pc && python3 -m pc_node.main --viewer --duos-ip 127.0.0.1
+python3 -m pc_node.main --viewer --plot --duos-ip 10.2.250.1
 ```
+
+Camera, ToF, p(gate) and the plot show up as in a real flight. `t` dumps the ring buffer and starts a finetune, `r` / `b` record, `z` quits. Leave `--fly` and `--keyboard` off, they only make sense with the drone.
+
+Everything on one machine: same commands with `--duos-ip 127.0.0.1`.
 
 Tests: `duos_node.tests.test_protocol`, `test_latent_reuse`, `test_navigator_backend`, `check_dumped_latents` (compares the latents of the last dump with a fresh encoder pass, run on the board after a crash).
 
