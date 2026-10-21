@@ -1,0 +1,17 @@
+# /etc/systemd/system/vd55g1-power.service
+# J2 camera connector: route I2C2 to the connector and switch the VD55G1
+# power on (CAM_PD1 / XGPIOA_4). u-boot leaves the pads as GPIO at every boot.
+# Install: sudo cp vd55g1-power.service /etc/systemd/system/ &&
+#          sudo systemctl enable --now vd55g1-power
+# Expects the repo at /home/debian/milkv (tools/deploy_duos.sh).
+[Unit]
+Description=VD55G1 camera on J2: I2C2 pin mux and power
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /home/debian/milkv/vd55g1/board/vd55g1-power.sh on
+ExecStop=/bin/sh /home/debian/milkv/vd55g1/board/vd55g1-power.sh off
+
+[Install]
+WantedBy=multi-user.target

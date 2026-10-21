@@ -7,6 +7,7 @@
 
 import os
 import select
+import subprocess
 import termios
 import threading
 import time
@@ -33,6 +34,8 @@ class UARTLink:
         self._tof_last = time.time()
 
     def start(self):
+        # after a reboot no frames arrived until stty had set up the port once
+        subprocess.run(["stty", "-F", PORT, "115200", "raw", "-echo"], check=False)
         self._fd = os.open(PORT, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         attr = termios.tcgetattr(self._fd)
         attr[0] = 0                                             # iflag: raw
@@ -72,16 +75,26 @@ class UARTLink:
     def _run(self):
         parser = protocol.UartParser()
         last_frame = 0.0
+        last_tof = time.monotonic()
+        tof_warned = False
         while self._running:
             ready, _, _ = select.select([self._fd], [], [], 0.1)
             if ready:
                 for frame_type, payload in parser.feed(os.read(self._fd, 4096)):
                     last_frame = time.monotonic()
                     if frame_type == protocol.UART_TOF and len(payload) == protocol.UART_TOF_LEN:
+                        last_tof = last_frame
+                        if tof_warned:
+                            print("[UART] ToF frames arriving again")
+                            tof_warned = False
                         self._handle_tof(payload)
                     elif frame_type == protocol.UART_STATE and len(payload) == protocol.UART_STATE_STRUCT.size:
                         self.on_state(protocol.uart_decode_state(payload))
             self.connected = time.monotonic() - last_frame < STALL_TIMEOUT_S
+            # drone state but no ToF: the deck failed to start (drone console says why)
+            if self.connected and not tof_warned and time.monotonic() - last_tof > 2.0:
+                print("[UART] WARNING: drone state arriving but no ToF frames, ToF deck failed? Restart the drone")
+                tof_warned = True
 
     def _handle_tof(self, payload):
         seq, timestamp_ms, dist_bytes, status_bytes = protocol.uart_decode_tof(payload)

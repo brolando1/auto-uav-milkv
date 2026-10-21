@@ -28,7 +28,7 @@ from training_quantization.continual_learning.runtime_utils import (  # noqa: E4
     EMAProbabilityFilter,
 )
 from common import protocol                     # noqa: E402
-from duos_node.camera import Camera                 # noqa: E402
+from duos_node.camera import CAMERAS, FakeCamera     # noqa: E402
 from duos_node.uart_link import UARTLink            # noqa: E402
 from duos_node.pairing import Pairer               # noqa: E402
 from duos_node.pc_link import PCLink               # noqa: E402
@@ -54,6 +54,12 @@ def parse_args():
 
     parser.add_argument("--fly", action="store_true",
                         help="Run the flight controller (setpoints go to the drone over the UART)")
+    parser.add_argument("--camera", choices=sorted(CAMERAS), default="gc2083",
+                        help="gc2083 (J1, vendor middleware) or vd55g1 (J2, milkv/vd55g1 driver)")
+    parser.add_argument("--fake_camera", action="store_true",
+                        help="Random frames instead of the camera (no camera connected)")
+    parser.add_argument("--gate_only", action="store_true",
+                        help="Send only the STATE frames (p(gate)) to the PC, no jpeg and ToF (weak wifi)")
 
     parser.add_argument("--ckpt", type=str, required=True, help="Path to GateClassifier checkpoint (.pt)")
     parser.add_argument("--deterministic", action="store_true")
@@ -179,25 +185,26 @@ def main():
     def on_frame(gray, seq):
         # the pairer gets every frame itself, the viewer a jpeg of every n-th
         jpeg_bytes = None
-        if seq % VIEWER_JPEG_EVERY == 0:
+        if seq % VIEWER_JPEG_EVERY == 0 and not args.gate_only:
             _, jpg = cv2.imencode('.jpg', gray, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
             jpeg_bytes = jpg.tobytes()
             pc_link.publish(protocol.FRAME_JPEG, protocol.encode_jpeg(seq, time.monotonic(), jpeg_bytes))
         pairer.on_camera(gray, jpeg_bytes, seq)
 
     def on_tof(package):
-        dist_bytes, status_bytes = package['raw']
-        pc_link.publish(
-            protocol.FRAME_TOF,
-            protocol.encode_tof(package['metadata']['seq'], time.monotonic(), dist_bytes, status_bytes),
-        )
+        if not args.gate_only:
+            dist_bytes, status_bytes = package['raw']
+            pc_link.publish(
+                protocol.FRAME_TOF,
+                protocol.encode_tof(package['metadata']['seq'], time.monotonic(), dist_bytes, status_bytes),
+            )
         pairer.set_tof(package)
         flight_data.set_tof(package)
 
     def frame_wanted(seq):
         return seq % TRAINING_CAM_EVERY == 0 or not orchestrator.training_has_priority(flight_status)
 
-    camera = Camera(on_frame, frame_wanted=frame_wanted)
+    camera = (FakeCamera if args.fake_camera else CAMERAS[args.camera])(on_frame, frame_wanted=frame_wanted)
     link = UARTLink(on_tof=on_tof, on_state=telemetry.update)
 
     service = InferenceService(
